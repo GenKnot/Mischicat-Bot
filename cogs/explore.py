@@ -112,11 +112,15 @@ class ExploreView(discord.ui.View):
         self.player = player
         self.cog = cog
 
+        seen = set()
         for i, choice in enumerate(event["choices"]):
-            if not choice.get("next"):
-                self.add_item(ExploreChoiceButton(choice["label"], i, False))
-            else:
-                self.add_item(ExploreChoiceButton(choice["label"], i, True))
+            if choice["label"] in seen:
+                continue
+            seen.add(choice["label"])
+            has_next = any(
+                c.get("next") for c in event["choices"] if c["label"] == choice["label"]
+            )
+            self.add_item(ExploreChoiceButton(choice["label"], i, has_next))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user != self.author:
@@ -170,7 +174,11 @@ class ExploreNextView(discord.ui.View):
         self.player = player
         self.cog = cog
 
+        seen = set()
         for i, choice in enumerate(next_event["choices"]):
+            if choice["label"] in seen:
+                continue
+            seen.add(choice["label"])
             self.add_item(ExploreNextButton(choice["label"], i))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:

@@ -251,7 +251,18 @@ class CultivationCog(commands.Cog, name="Cultivation"):
                 "· 修炼消耗寿元，换取修为积累\n"
                 "· 修为积满可尝试突破，失败有代价\n"
                 "· 寿元归零，角色坐化，需重新创建\n"
-                "· 超过 2 年未行动，自动进入修炼状态"
+                "· 超过 2 年未行动，自动进入修炼状态\n\n"
+                "**探险系统**\n"
+                "· `cat!探险` 随机触发事件，每 5 游戏年可探险 8 次\n"
+                "· 12% 概率触发稀有事件，奖励丰厚\n"
+                "· 所在城市与地区影响事件池，加入宗门后有专属事件\n\n"
+                "**移动与世界**\n"
+                "· 天下共 30 座城市，分布于东域、南域、西域、北域、中州\n"
+                "· 点击「移动」按钮或使用 `cat!移动 [城市名]` 前往目的地\n"
+                "· 闭关期间无法移动\n\n"
+                "**宗门系统**\n"
+                "· 满足条件后可加入宗门，获得专属事件与功法加成\n"
+                "· 使用 `cat!宗门` 查看天下宗门信息"
             ),
             color=discord.Color.teal(),
         )
@@ -477,6 +488,74 @@ class CultivationCog(commands.Cog, name="Cultivation"):
                 f"{ctx.author.mention} **{player['name']}** 突破失败。{fail_msg}\n"
                 f"修为：{new_cultivation}/{needed}　寿元剩余：{new_lifespan} 年"
             )
+
+    @commands.command(name="移动")
+    async def travel(self, ctx, *, city_name: str = None):
+        uid = str(ctx.author.id)
+        player = self._get_player(uid)
+
+        if not player:
+            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `cat!创建角色`。")
+        if player["is_dead"]:
+            return await ctx.send(f"{ctx.author.mention} 道友已坐化。")
+
+        if not city_name:
+            city_list = "\n".join(
+                f"**{c['name']}**（{c['region']}）— {c['desc']}" for c in CITIES
+            )
+            return await ctx.send(
+                f"{ctx.author.mention} 请指定目的地，用法：`cat!移动 [城市名]`\n\n{city_list}"
+            )
+
+        now = time.time()
+        if player["cultivating_until"] and now < player["cultivating_until"]:
+            remaining = seconds_to_years(player["cultivating_until"] - now)
+            return await ctx.send(
+                f"{ctx.author.mention} 道友正在闭关，无法移动。还剩约 **{remaining:.1f} 年**，可使用 `cat!停止` 提前结束。"
+            )
+
+        from utils.world import get_city
+        target = get_city(city_name)
+        if not target:
+            matches = [c for c in CITIES if city_name in c["name"]]
+            if len(matches) == 1:
+                target = matches[0]
+            elif len(matches) > 1:
+                names = "、".join(c["name"] for c in matches)
+                return await ctx.send(f"{ctx.author.mention} 找到多个匹配城市：{names}，请输入完整城市名。")
+            else:
+                return await ctx.send(f"{ctx.author.mention} 未找到城市「{city_name}」，请检查名称是否正确。")
+
+        if target["name"] == player["current_city"]:
+            return await ctx.send(f"{ctx.author.mention} 道友已在 **{target['name']}**，无需移动。")
+
+        with get_conn() as conn:
+            conn.execute(
+                "UPDATE players SET current_city = ? WHERE discord_id = ?",
+                (target["name"], uid)
+            )
+            conn.commit()
+
+        embed = discord.Embed(
+            title=f"✦ 抵达 {target['name']} ✦",
+            description=target["desc"],
+            color=discord.Color.teal(),
+        )
+        embed.set_footer(text=f"{target['region']} · 原驻地：{player['current_city']}")
+        await ctx.send(ctx.author.mention, embed=embed)
+
+    @commands.command(name="世界")
+    async def world_map(self, ctx):
+        from collections import defaultdict
+        region_map = defaultdict(list)
+        for c in CITIES:
+            region_map[c["region"]].append(c["name"])
+
+        embed = discord.Embed(title="✦ 天下城市 ✦", color=discord.Color.teal())
+        for region, cities in region_map.items():
+            embed.add_field(name=region, value="、".join(cities), inline=False)
+        embed.set_footer(text="使用 cat!移动 [城市名] 前往目的地")
+        await ctx.send(embed=embed)
 
     @commands.command(name="创建角色")
     async def create_character(self, ctx):

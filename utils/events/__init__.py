@@ -1,17 +1,22 @@
 from utils.events.common_1 import EVENTS as _e1
 from utils.events.common_2 import EVENTS as _e2
 from utils.events.common_3 import EVENTS as _e3
+from utils.events.common_4 import EVENTS as _e4
 from utils.events.rare_1 import EVENTS as _rare1
 from utils.events.rare_2 import EVENTS as _rare2
+from utils.events.rare_3 import EVENTS as _rare3
 from utils.events.regions.east import EVENTS as _east
 from utils.events.regions.south import EVENTS as _south
 from utils.events.regions.west import EVENTS as _west
 from utils.events.regions.north import EVENTS as _north
 from utils.events.regions.central import EVENTS as _central
 from utils.events.sects_events import EVENTS as _sects
+from utils.events.city_trade import EVENTS as _city_trade
+from utils.events.city_combat import EVENTS as _city_combat
+from utils.events.city_culture import EVENTS as _city_culture
 
-EVENTS = _e1 + _e2 + _e3
-RARE_EVENTS = _rare1 + _rare2
+EVENTS = _e1 + _e2 + _e3 + _e4
+RARE_EVENTS = _rare1 + _rare2 + _rare3
 
 REGION_EVENTS = {
     "东域": _east,
@@ -23,6 +28,8 @@ REGION_EVENTS = {
 
 SECT_EVENTS = _sects
 
+_ALL_CITY_EVENTS = _city_trade + _city_combat + _city_culture
+
 RARE_CHANCE = 0.12
 
 
@@ -33,13 +40,16 @@ def get_event_pool(player: dict) -> list:
 
     pool = list(EVENTS)
 
-    city = player.get("city", "")
+    city = player.get("current_city", "")
     from utils.world import get_city
     city_data = get_city(city)
     if city_data:
         region = city_data.get("region", "")
         region_pool = REGION_EVENTS.get(region, [])
         pool = pool + region_pool * 2
+        city_pool = [e for e in _ALL_CITY_EVENTS if e.get("city") == city]
+        if city_pool:
+            pool = pool + city_pool * 2
 
     sect = player.get("sect", "")
     if sect:

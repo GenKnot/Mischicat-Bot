@@ -106,7 +106,7 @@ class PropertyCog(commands.Cog, name="Property"):
         if not region_name:
             lines = "\n".join(f"· **{r['name']}**（{r['type']}）— {r['desc']}" for r in SPECIAL_REGIONS)
             return await ctx.send(
-                f"{ctx.author.mention} 请指定秘地名称，用法：`cat!开辟洞府 [秘地名]`\n\n{lines}"
+                f"{ctx.author.mention} 请指定秘地名称，用法：`mcat!开辟洞府 [秘地名]`\n\n{lines}"
             )
 
         target = next((r for r in SPECIAL_REGIONS if r["name"] == region_name), None)
@@ -151,7 +151,7 @@ class PropertyCog(commands.Cog, name="Property"):
         cave = player.get("cave")
 
         if not residences and not cave:
-            return await ctx.send(f"{ctx.author.mention} 道友尚未置业，可使用 `cat!买房` 在当前城市购置居所。")
+            return await ctx.send(f"{ctx.author.mention} 道友尚未置业，可使用 `mcat!买房` 在当前城市购置居所。")
 
         embed = discord.Embed(title=f"✦ {player['name']} 的居所 ✦", color=discord.Color.teal())
 

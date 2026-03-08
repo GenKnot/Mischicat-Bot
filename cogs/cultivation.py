@@ -66,7 +66,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
                 conn.commit()
             await ctx.send(
                 f"{ctx.author.mention} 道友 **{player['name']}** 寿元已尽，魂归天道。\n"
-                "尘归尘，土归土，可使用 `cat!创建角色` 重入修仙之路。"
+                "尘归尘，土归土，可使用 `mcat!创建角色` 重入修仙之路。"
             )
             return True
         return False
@@ -96,7 +96,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         uid = str(interaction.user.id)
         player = self._get_player(uid)
         if not player:
-            return await interaction.followup.send("尚未踏入修仙之路，请先使用 `cat!创建角色`。")
+            return await interaction.followup.send("尚未踏入修仙之路，请先使用 `mcat!创建角色`。")
         updates, _ = self._settle_time(player)
         self._apply_updates(uid, updates)
         player = self._get_player(uid)
@@ -105,7 +105,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
                 conn.execute("UPDATE players SET is_dead = 1 WHERE discord_id = ?", (uid,))
                 conn.commit()
             return await interaction.followup.send(
-                f"道友 **{player['name']}** 寿元已尽，魂归天道。\n可使用 `cat!创建角色` 重入修仙之路。"
+                f"道友 **{player['name']}** 寿元已尽，魂归天道。\n可使用 `mcat!创建角色` 重入修仙之路。"
             )
         now = time.time()
         needed = cultivation_needed(player["realm"])
@@ -159,7 +159,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         now = time.time()
         if player["cultivating_until"] and now < player["cultivating_until"]:
             remaining = seconds_to_years(player["cultivating_until"] - now)
-            return await interaction.followup.send(f"道友正在闭关，还剩约 **{remaining:.1f} 年**，可使用 `cat!停止` 提前结束。")
+            return await interaction.followup.send(f"道友正在闭关，还剩约 **{remaining:.1f} 年**，可使用 `mcat!停止` 提前结束。")
 
         bonus = get_cultivation_bonus(uid, player["current_city"], player.get("cave"))
         embed = discord.Embed(
@@ -371,7 +371,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         player = self._get_player(uid)
 
         if not player:
-            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `cat!创建角色`。")
+            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `mcat!创建角色`。")
 
         updates, _ = self._settle_time(player)
         self._apply_updates(uid, updates)
@@ -429,7 +429,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         player = self._get_player(uid)
 
         if not player:
-            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `cat!创建角色`。")
+            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `mcat!创建角色`。")
 
         updates, _ = self._settle_time(player)
         self._apply_updates(uid, updates)
@@ -444,7 +444,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             remaining = seconds_to_years(player["cultivating_until"] - now)
             return await ctx.send(
                 f"{ctx.author.mention} 道友正在闭关修炼，还剩约 **{remaining:.1f} 年**，"
-                "可使用 `cat!停止` 提前结束。"
+                "可使用 `mcat!停止` 提前结束。"
             )
 
         if years < 1 or years > 100:
@@ -521,7 +521,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         player = self._get_player(uid)
 
         if not player:
-            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `cat!创建角色`。")
+            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `mcat!创建角色`。")
 
         updates, _ = self._settle_time(player)
         self._apply_updates(uid, updates)
@@ -548,7 +548,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         uid = str(ctx.author.id)
 
         if not target:
-            return await ctx.send(f"{ctx.author.mention} 用法：`cat!双修 @对方`")
+            return await ctx.send(f"{ctx.author.mention} 用法：`mcat!双修 @对方`")
         if target == ctx.author:
             return await ctx.send(f"{ctx.author.mention} 无法与自己双修。")
         if target.bot:
@@ -749,7 +749,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         player = self._get_player(uid)
 
         if not player:
-            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `cat!创建角色`。")
+            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `mcat!创建角色`。")
         if player["is_dead"]:
             return await ctx.send(f"{ctx.author.mention} 道友已坐化。")
 
@@ -758,14 +758,14 @@ class CultivationCog(commands.Cog, name="Cultivation"):
                 f"**{c['name']}**（{c['region']}）— {c['desc']}" for c in CITIES
             )
             return await ctx.send(
-                f"{ctx.author.mention} 请指定目的地，用法：`cat!移动 [城市名]`\n\n{city_list}"
+                f"{ctx.author.mention} 请指定目的地，用法：`mcat!移动 [城市名]`\n\n{city_list}"
             )
 
         now = time.time()
         if player["cultivating_until"] and now < player["cultivating_until"]:
             remaining = seconds_to_years(player["cultivating_until"] - now)
             return await ctx.send(
-                f"{ctx.author.mention} 道友正在闭关，无法移动。还剩约 **{remaining:.1f} 年**，可使用 `cat!停止` 提前结束。"
+                f"{ctx.author.mention} 道友正在闭关，无法移动。还剩约 **{remaining:.1f} 年**，可使用 `mcat!停止` 提前结束。"
             )
 
         from utils.world import get_city
@@ -808,7 +808,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         embed = discord.Embed(title="✦ 天下城市 ✦", color=discord.Color.teal())
         for region, cities in region_map.items():
             embed.add_field(name=region, value="、".join(cities), inline=False)
-        embed.set_footer(text="使用 cat!移动 [城市名] 前往目的地")
+        embed.set_footer(text="使用 mcat!移动 [城市名] 前往目的地")
         await ctx.send(embed=embed)
 
     @commands.command(name="help")
@@ -818,47 +818,47 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             color=discord.Color.teal(),
         )
         embed.add_field(name="基础", value=(
-            "`cat!c` — 主菜单\n"
-            "`cat!创建角色` — 创建角色\n"
-            "`cat!查看` — 查看角色面板\n"
-            "`cat!修炼 [年数]` — 开始闭关\n"
-            "`cat!停止` — 提前结束闭关\n"
-            "`cat!突破` — 尝试突破境界"
+            "`mcat!c` — 主菜单\n"
+            "`mcat!创建角色` — 创建角色\n"
+            "`mcat!查看` — 查看角色面板\n"
+            "`mcat!修炼 [年数]` — 开始闭关\n"
+            "`mcat!停止` — 提前结束闭关\n"
+            "`mcat!突破` — 尝试突破境界"
         ), inline=False)
         embed.add_field(name="探险", value=(
-            "`cat!探险` — 随机触发事件（每5游戏年8次）"
+            "`mcat!探险` — 随机触发事件（每5游戏年8次）"
         ), inline=False)
         embed.add_field(name="双修", value=(
-            "`cat!双修 @对方` — 邀请他人进行双修（需一方持有「双修功法」）\n"
+            "`mcat!双修 @对方` — 邀请他人进行双修（需一方持有「双修功法」）\n"
             "· 双方皆为清白之身时修为暴涨，冷却 2 游戏年"
         ), inline=False)
         embed.add_field(name="移动", value=(
-            "`cat!移动 [城市名]` — 前往目标城市\n"
-            "`cat!世界` — 查看天下城市列表"
+            "`mcat!移动 [城市名]` — 前往目标城市\n"
+            "`mcat!世界` — 查看天下城市列表"
         ), inline=False)
         embed.add_field(name="宗门", value=(
-            "`cat!宗门列表` — 查看所有宗门\n"
-            "`cat!宗门详情 [宗门名]` — 查看入门要求与功法\n"
-            "`cat!加入宗门 [宗门名]` — 加入宗门\n"
-            "`cat!退出宗门` — 离开宗门\n"
-            "`cat!门派功法` — 查看宗门功法，若有缺漏会自动补发"
+            "`mcat!宗门列表` — 查看所有宗门\n"
+            "`mcat!宗门详情 [宗门名]` — 查看入门要求与功法\n"
+            "`mcat!加入宗门 [宗门名]` — 加入宗门\n"
+            "`mcat!退出宗门` — 离开宗门\n"
+            "`mcat!门派功法` — 查看宗门功法，若有缺漏会自动补发"
         ), inline=False)
         embed.add_field(name="功法", value=(
-            "`cat!我的功法` — 查看已习得功法与装备状态\n"
-            "`cat!装备功法 [功法名]` — 装备/卸下功法（最多5本）\n"
-            "`cat!修炼功法 [功法名]` — 消耗灵石与寿元提升功法阶段\n"
+            "`mcat!我的功法` — 查看已习得功法与装备状态\n"
+            "`mcat!装备功法 [功法名]` — 装备/卸下功法（最多5本）\n"
+            "`mcat!修炼功法 [功法名]` — 消耗灵石与寿元提升功法阶段\n"
             "　　阶段：入门→熟练→精通→小成→大成→圆满→破限\n"
-            "`cat!功法属性` — 查看已装备功法的属性加成"
+            "`mcat!功法属性` — 查看已装备功法的属性加成"
         ), inline=False)
         embed.add_field(name="居所", value=(
-            "`cat!买房` — 在当前城市置业（声望≥300）\n"
-            "`cat!开辟洞府 [秘地名]` — 开辟野外洞府（声望≥600）\n"
-            "`cat!我的居所` — 查看居所与加成"
+            "`mcat!买房` — 在当前城市置业（声望≥300）\n"
+            "`mcat!开辟洞府 [秘地名]` — 开辟野外洞府（声望≥600）\n"
+            "`mcat!我的居所` — 查看居所与加成"
         ), inline=False)
         embed.add_field(name="音乐", value=(
-            "`cat!play [歌曲/链接]` — 播放音乐\n"
-            "`cat!skip` — 跳过当前曲目\n"
-            "`cat!stop` — 停止播放"
+            "`mcat!play [歌曲/链接]` — 播放音乐\n"
+            "`mcat!skip` — 跳过当前曲目\n"
+            "`mcat!stop` — 停止播放"
         ), inline=False)
         embed.add_field(name="奇遇", value=(
             "传闻修士坐化之际，有极小概率触发神秘奇遇。\n"

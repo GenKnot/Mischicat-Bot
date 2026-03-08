@@ -1,0 +1,14 @@
+version: '3.8'
+services:
+  mischicat-bot:
+    image: mischicat-bot:latest
+    container_name: mischicat-bot
+    env_file:
+      - .env
+    volumes:
+      - sqlite-data:/app/sqlite-data
+    restart: unless-stopped
+
+volumes:
+  sqlite-data:
+    driver: local

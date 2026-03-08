@@ -332,7 +332,7 @@ class ExploreCog(commands.Cog, name="Explore"):
         player = _get_player(uid)
 
         if not player:
-            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `cat!创建角色`。")
+            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `mcat!创建角色`。")
         if player["is_dead"]:
             return await ctx.send(f"{ctx.author.mention} 道友已坐化。")
 

@@ -6,7 +6,7 @@ from discord.ext import commands
 
 class MischicatBot(commands.Bot):
     def __init__(self):
-        prefix = os.getenv("COMMAND_PREFIX", "cat!")
+        prefix = os.getenv("COMMAND_PREFIX", "mcat!")
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix=prefix, intents=intents, help_command=None)

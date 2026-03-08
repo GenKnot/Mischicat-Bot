@@ -230,7 +230,7 @@ class SectCog(commands.Cog, name="Sect"):
             description="\n".join(lines),
             color=discord.Color.teal(),
         )
-        embed.set_footer(text="✦ 已装备　○ 未装备　最多装备5本　使用 cat!装备功法 [功法名] 切换")
+        embed.set_footer(text="✦ 已装备　○ 未装备　最多装备5本　使用 mcat!装备功法 [功法名] 切换")
         if player["sect"]:
             embed.add_field(name="宗门", value=f"{player['sect']} · {player['sect_rank']}", inline=False)
         await ctx.send(embed=embed)

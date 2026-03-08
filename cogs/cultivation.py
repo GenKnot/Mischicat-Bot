@@ -937,7 +937,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         embed.add_field(name="公共事件", value=(
             "`cat!公共事件` — 查看当前全服事件状态\n"
             "· 每10游戏年自动触发一次（拍卖会/试炼/妖兽潮等）\n"
-            "· 需在 .env 设置 PUBLIC_EVENT_CHANNEL_ID 指定广播频道"
+            "· 参与事件可获得丹药、装备等稀有奖励"
         ), inline=False)
         embed.add_field(name="音乐", value=(
             "`cat!play [歌曲/链接]` — 播放音乐\n"

@@ -1,5 +1,10 @@
 version: '3.8'
 services:
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    container_name: pot-provider
+    restart: unless-stopped
+
   mischicat-bot:
     image: mischicat-bot:latest
     container_name: mischicat-bot
@@ -7,6 +12,8 @@ services:
       - .env
     volumes:
       - sqlite-data:/app/sqlite-data
+    depends_on:
+      - pot-provider
     restart: unless-stopped
 
 volumes:

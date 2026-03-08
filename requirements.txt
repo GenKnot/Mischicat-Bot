@@ -2,3 +2,4 @@ discord.py
 yt-dlp
 PyNaCl
 python-dotenv
+bgutil-ytdlp-pot-provider

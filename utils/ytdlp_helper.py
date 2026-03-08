@@ -3,13 +3,15 @@ import sys
 
 import yt_dlp
 
+PREFERRED_BROWSERS = os.getenv("YTDLP_BROWSER_ORDER", "edge,chrome,brave,chromium,firefox,safari").split(",")
+
 FFMPEG_OPTIONS = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
     "options": "-vn",
 }
 
 BASE_OPTIONS = {
-    "format": "bestaudio/best",
+    "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
     "outtmpl": "downloads/%(extractor)s-%(id)s-%(title)s.%(ext)s",
     "restrictfilenames": True,
     "noplaylist": True,
@@ -20,6 +22,11 @@ BASE_OPTIONS = {
     "no_warnings": True,
     "default_search": "auto",
     "source_address": "0.0.0.0",
+    "extractor_args": {
+        "youtube": {
+            "player-client": ["default", "mweb"],
+        },
+    },
 }
 
 _BROWSER_PATHS = {
@@ -50,6 +57,10 @@ _BROWSER_PATHS = {
 def _detect_browser():
     platform = "linux" if sys.platform.startswith("linux") else sys.platform
     paths = _BROWSER_PATHS.get(platform, {})
+    for browser in PREFERRED_BROWSERS:
+        browser = browser.strip()
+        if browser in paths and os.path.exists(os.path.expanduser(paths[browser])):
+            return browser
     for browser, path in paths.items():
         if os.path.exists(os.path.expanduser(path)):
             return browser
@@ -57,11 +68,20 @@ def _detect_browser():
 
 
 _browser = _detect_browser()
-print(f"browser for cookies: {_browser or 'none found'}")
+_cookie_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cookies.txt")
+_has_cookie_file = os.path.isfile(_cookie_file)
+
+if _has_cookie_file:
+    print(f"using cookie file: {_cookie_file}")
+else:
+    print(f"browser for cookies: {_browser or 'none found'}")
 
 
 def get_ytdl(with_cookies: bool = True):
     opts = dict(BASE_OPTIONS)
-    if with_cookies and _browser:
-        opts["cookiesfrombrowser"] = (_browser,)
+    if with_cookies:
+        if _has_cookie_file:
+            opts["cookiefile"] = _cookie_file
+        elif _browser:
+            opts["cookiesfrombrowser"] = (_browser,)
     return yt_dlp.YoutubeDL(opts)

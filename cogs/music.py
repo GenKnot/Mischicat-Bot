@@ -71,6 +71,7 @@ class MusicCog(commands.Cog, name="Music"):
         async with ctx.typing():
             loop = asyncio.get_event_loop()
             data = None
+            last_error = None
             for with_cookies in (True, False):
                 try:
                     ytdl = get_ytdl(with_cookies=with_cookies)
@@ -78,9 +79,16 @@ class MusicCog(commands.Cog, name="Music"):
                         None, lambda: ytdl.extract_info(query, download=False)
                     )
                     break
-                except Exception:
+                except Exception as e:
+                    last_error = e
                     if not with_cookies:
-                        await ctx.send("couldn't fetch that, YouTube may be blocking requests")
+                        err_msg = str(e)
+                        if "Sign in" in err_msg or "bot" in err_msg:
+                            await ctx.send("YouTube is blocking requests — try switching browser cookies (set `YTDLP_BROWSER_ORDER` env var, e.g. `edge,chrome`)")
+                        elif "Requested format" in err_msg:
+                            await ctx.send("format not available for this video, might be age-restricted or region-locked")
+                        else:
+                            await ctx.send(f"couldn't fetch that: {err_msg[:200]}")
                         return
             if data is None:
                 return

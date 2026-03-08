@@ -266,13 +266,12 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             if success:
                 new_lifespan_max = lifespan_max_for_realm(nxt)
                 lifespan_gain = max(0, new_lifespan_max - current["lifespan_max"])
-                new_lifespan = min(current["lifespan"] + lifespan_gain, new_lifespan_max)
+                new_lifespan = current["lifespan"] + lifespan_gain
                 with get_conn() as conn:
-                    conn.execute("""
-                        UPDATE players SET realm = ?, cultivation = 0,
-                            lifespan = ?, lifespan_max = ?, last_active = ?
-                        WHERE discord_id = ?
-                    """, (nxt, new_lifespan, new_lifespan_max, now, uid))
+                    conn.execute(
+                        "UPDATE players SET realm = ?, lifespan = ?, lifespan_max = ?, cultivation = 0, last_active = ? WHERE discord_id = ?",
+                        (nxt, new_lifespan, new_lifespan_max, now, uid)
+                    )
                     conn.commit()
                 lifespan_line = f"寿元上限→{new_lifespan_max}年" if lifespan_gain > 0 else f"寿元{new_lifespan}年"
                 chain.append(f"**{current['realm']}** ➜ **{nxt}**（{lifespan_line}）")

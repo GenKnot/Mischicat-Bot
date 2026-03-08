@@ -7,7 +7,7 @@ from utils.sects import SECTS, check_requirements
 def _build_menu_embed(has_dual: bool = False) -> discord.Embed:
     dual_section = (
         "\n\n**双修系统**\n"
-        "· 使用 `cat!双修 @对方` 邀请他人进行双修\n"
+        "· 使用 `cat!双修 @对方` 邀请他人进行双修（需双修功法）\n"
         "· 双方皆为清白之身时修为暴涨（10-20倍），一方清白5倍，否则1.2倍\n"
         "· 双修冷却 2 游戏年，闭关中无法双修"
     ) if has_dual else ""

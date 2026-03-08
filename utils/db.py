@@ -24,6 +24,9 @@ def _migrate(conn):
         ("explore_count",        "INTEGER NOT NULL DEFAULT 0"),
         ("explore_reset_year",   "REAL NOT NULL DEFAULT 0"),
         ("cave",                 "TEXT"),
+        ("discovered_sects",     "TEXT NOT NULL DEFAULT '[]'"),
+        ("escape_rate",          "INTEGER NOT NULL DEFAULT 0"),
+        ("has_bahongchen",       "INTEGER NOT NULL DEFAULT 0"),
     ]
     for col, definition in migrations:
         if col not in existing:
@@ -74,7 +77,9 @@ def init_db():
                 cultivation_overflow  INTEGER NOT NULL DEFAULT 0,
                 current_city          TEXT NOT NULL DEFAULT '灵虚城',
                 explore_count         INTEGER NOT NULL DEFAULT 0,
-                explore_reset_year    REAL NOT NULL DEFAULT 0
+                explore_reset_year    REAL NOT NULL DEFAULT 0,
+                escape_rate           INTEGER NOT NULL DEFAULT 0,
+                has_bahongchen        INTEGER NOT NULL DEFAULT 0
             )
         """)
         _migrate(conn)

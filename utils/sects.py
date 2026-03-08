@@ -1,66 +1,128 @@
 from utils.realms import get_realm_index
 
-TECHNIQUES = {
-    "青云心法":   {"type": "修炼", "effect": {"cultivation_bonus": 0.15, "comprehension_bonus": 1}},
-    "御剑术":     {"type": "攻击", "effect": {"attack_scale": "comprehension"}},
-    "凌云步":     {"type": "辅助", "effect": {"escape_bonus": 0.3}},
+TECHNIQUE_STAGES = ["入门", "熟练", "精通", "小成", "大成", "圆满", "破限"]
 
-    "天玄真经":   {"type": "修炼", "effect": {"cultivation_bonus": 0.10}},
-    "玄门护体":   {"type": "防御", "effect": {"defense_scale": "physique"}},
-    "天玄剑诀":   {"type": "攻击", "effect": {"attack_scale": "comprehension", "multiplier": 0.8}},
-
-    "百草心经":   {"type": "修炼", "effect": {"cultivation_bonus": 0.10, "soul_bonus": 1, "herb_bonus": 2.0}},
-    "木灵诀":     {"type": "辅助", "effect": {"lifespan_restore": 5}},
-    "丹火术":     {"type": "攻击", "effect": {"attack_scale": "soul", "dot": True}},
-
-    "御剑心法":   {"type": "修炼", "effect": {"cultivation_bonus_scale": "comprehension"}},
-    "万剑归宗":   {"type": "攻击", "effect": {"attack_scale": "comprehension", "multiplier": 2.0}},
-    "剑盾":       {"type": "防御", "effect": {"defense_scale": "comprehension"}},
-
-    "玄冰心法":   {"type": "修炼", "effect": {"cultivation_bonus": 0.20, "element_restrict": ["水", "冰"]}},
-    "寒冰掌":     {"type": "攻击", "effect": {"attack_scale": "physique", "freeze": True}},
-    "冰甲术":     {"type": "防御", "effect": {"defense_scale": "physique", "cost": "high"}},
-
-    "血煞功":     {"type": "修炼", "effect": {"cultivation_bonus_scale": "physique", "kill_bonus": True}},
-    "血煞刀法":   {"type": "攻击", "effect": {"attack_scale": "physique", "multiplier": 1.8}},
-    "铁布衫":     {"type": "防御", "effect": {"defense_scale": "physique", "no_spirit": True}},
-
-    "幽冥心法":   {"type": "修炼", "effect": {"cultivation_bonus": 0.15, "soul_bonus": 1, "night_bonus": 2.0}},
-    "鬼影步":     {"type": "辅助", "effect": {"stealth_bonus": 0.4}},
-    "摄魂术":     {"type": "攻击", "effect": {"attack_scale": "soul", "ignore_defense": True}},
-
-    "魔焰心法":   {"type": "修炼", "effect": {"cultivation_bonus": 0.25, "element_restrict": ["火"], "lifespan_cost": 1}},
-    "魔焰掌":     {"type": "攻击", "effect": {"attack_scale": "physique", "multiplier": 2.2, "self_damage": True}},
-    "火云护体":   {"type": "防御", "effect": {"defense_scale": "physique", "reflect": True}},
-
-    "合欢心法":   {"type": "修炼", "effect": {"cultivation_bonus": 0.05, "dual_bonus": True}},
-    "双修功法":   {"type": "特殊", "effect": {"dual_cultivate": True, "cooldown_years": 5}},
-    "媚术":       {"type": "辅助", "effect": {"debuff_scale": "fortune"}},
-
-    "噬魂心法":   {"type": "修炼", "effect": {"cultivation_bonus_scale": "soul"}},
-    "神识冲击":   {"type": "攻击", "effect": {"attack_scale": "soul", "ignore_defense": True, "multiplier": 2.0}},
-    "神识壁垒":   {"type": "防御", "effect": {"defense_scale": "soul", "anti_mental": True}},
-
-    "太虚真经":   {"type": "修炼", "effect": {"cultivation_bonus": 0.50, "single_root_only": True, "realm_scale": True}},
-    "太虚剑意":   {"type": "攻击", "effect": {"attack_scale": "comprehension", "multiplier": 3.0}},
-    "虚空遁形":   {"type": "辅助", "effect": {"invincible": True, "cost": "extreme"}},
-
-    "混沌心法":   {"type": "修炼", "effect": {"cultivation_bonus": 0.60, "variant_only": True, "dual_element": True}},
-    "混沌气团":   {"type": "攻击", "effect": {"multi_element": True, "ignore_single_defense": True}},
-    "混沌护体":   {"type": "防御", "effect": {"random_element_shield": True}},
-
-    "天机心法":   {"type": "修炼", "effect": {"cultivation_bonus_scale": "fortune", "enlighten_chance": True}},
-    "天机预演":   {"type": "辅助", "effect": {"dodge_bonus_scale": "fortune"}},
-    "因果斩":     {"type": "攻击", "effect": {"ignore_realm": True, "lifespan_cost": 10}},
-
-    "无极心法":   {"type": "修炼", "effect": {"cultivation_bonus": 0.40, "all_stat_bonus": True}},
-    "无极拳":     {"type": "攻击", "effect": {"attack_scale": "all_stats"}},
-    "无极护体":   {"type": "防御", "effect": {"defense_scale": "all_stats"}},
-
-    "轮回心法":   {"type": "修炼", "effect": {"cultivation_bonus_per_death": 0.20}},
-    "死亡凝视":   {"type": "攻击", "effect": {"ignore_defense_chance": 0.3, "attack_scale": "soul"}},
-    "不死之身":   {"type": "防御", "effect": {"revive_chance": 0.3, "once_per_realm": True}},
+STAGE_COST_BASE = {
+    "入门":  500,
+    "熟练":  1000,
+    "精通":  2000,
+    "小成":  4000,
+    "大成":  8000,
+    "圆满":  16000,
 }
+
+STAGE_TIME_BASE = {
+    "入门":  1,
+    "熟练":  2,
+    "精通":  4,
+    "小成":  8,
+    "大成":  16,
+    "圆满":  32,
+}
+
+GRADE_COST_MULTIPLIER = {
+    "黄级下品": 0.5, "黄级中品": 0.8, "黄级上品": 1.0,
+    "玄级下品": 2.0, "玄级中品": 3.0, "玄级上品": 4.0,
+    "地级下品": 8.0, "地级中品": 12.0, "地级上品": 16.0,
+    "天级下品": 30.0, "天级中品": 50.0, "天级上品": 80.0,
+}
+
+STAGE_STAT_MULTIPLIER = {
+    "入门": 1, "熟练": 2, "精通": 3, "小成": 5, "大成": 8, "圆满": 12, "破限": 20,
+}
+
+TECHNIQUES = {
+    "青云心法":   {"type": "修炼", "grade": "黄级上品", "stat_bonus": {"comprehension": 1, "cultivation_speed": 0.15}, "effect": {"cultivation_bonus": 0.15, "comprehension_bonus": 1}},
+    "御剑术":     {"type": "攻击", "grade": "黄级上品", "stat_bonus": {"comprehension": 1}, "effect": {"attack_scale": "comprehension"}},
+    "凌云步":     {"type": "辅助", "grade": "黄级上品", "stat_bonus": {"escape_rate": 10}, "effect": {"escape_bonus": 0.3}},
+
+    "天玄真经":   {"type": "修炼", "grade": "黄级上品", "stat_bonus": {"cultivation_speed": 0.10}, "effect": {"cultivation_bonus": 0.10}},
+    "玄门护体":   {"type": "防御", "grade": "黄级上品", "stat_bonus": {"physique": 1}, "effect": {"defense_scale": "physique"}},
+    "天玄剑诀":   {"type": "攻击", "grade": "黄级上品", "stat_bonus": {"comprehension": 1}, "effect": {"attack_scale": "comprehension", "multiplier": 0.8}},
+
+    "百草心经":   {"type": "修炼", "grade": "黄级上品", "stat_bonus": {"soul": 1, "cultivation_speed": 0.10}, "effect": {"cultivation_bonus": 0.10, "soul_bonus": 1, "herb_bonus": 2.0}},
+    "木灵诀":     {"type": "辅助", "grade": "黄级上品", "stat_bonus": {"lifespan_bonus": 5}, "effect": {"lifespan_restore": 5}},
+    "丹火术":     {"type": "攻击", "grade": "黄级上品", "stat_bonus": {"soul": 1}, "effect": {"attack_scale": "soul", "dot": True}},
+
+    "御剑心法":   {"type": "修炼", "grade": "黄级上品", "stat_bonus": {"comprehension": 2}, "effect": {"cultivation_bonus_scale": "comprehension"}},
+    "万剑归宗":   {"type": "攻击", "grade": "黄级上品", "stat_bonus": {"comprehension": 2}, "effect": {"attack_scale": "comprehension", "multiplier": 2.0}},
+    "剑盾":       {"type": "防御", "grade": "黄级上品", "stat_bonus": {"comprehension": 1}, "effect": {"defense_scale": "comprehension"}},
+
+    "玄冰心法":   {"type": "修炼", "grade": "黄级上品", "stat_bonus": {"physique": 1, "cultivation_speed": 0.20}, "effect": {"cultivation_bonus": 0.20, "element_restrict": ["水", "冰"]}},
+    "寒冰掌":     {"type": "攻击", "grade": "黄级上品", "stat_bonus": {"physique": 2}, "effect": {"attack_scale": "physique", "freeze": True}},
+    "冰甲术":     {"type": "防御", "grade": "黄级上品", "stat_bonus": {"physique": 2}, "effect": {"defense_scale": "physique", "cost": "high"}},
+
+    "血煞功":     {"type": "修炼", "grade": "黄级上品", "stat_bonus": {"physique": 2}, "effect": {"cultivation_bonus_scale": "physique", "kill_bonus": True}},
+    "血煞刀法":   {"type": "攻击", "grade": "黄级上品", "stat_bonus": {"physique": 2}, "effect": {"attack_scale": "physique", "multiplier": 1.8}},
+    "铁布衫":     {"type": "防御", "grade": "黄级上品", "stat_bonus": {"physique": 3}, "effect": {"defense_scale": "physique", "no_spirit": True}},
+
+    "幽冥心法":   {"type": "修炼", "grade": "黄级上品", "stat_bonus": {"soul": 2, "cultivation_speed": 0.15}, "effect": {"cultivation_bonus": 0.15, "soul_bonus": 1, "night_bonus": 2.0}},
+    "鬼影步":     {"type": "辅助", "grade": "黄级上品", "stat_bonus": {"escape_rate": 15}, "effect": {"stealth_bonus": 0.4}},
+    "摄魂术":     {"type": "攻击", "grade": "黄级上品", "stat_bonus": {"soul": 2}, "effect": {"attack_scale": "soul", "ignore_defense": True}},
+
+    "魔焰心法":   {"type": "修炼", "grade": "黄级上品", "stat_bonus": {"physique": 1, "cultivation_speed": 0.25}, "effect": {"cultivation_bonus": 0.25, "element_restrict": ["火"], "lifespan_cost": 1}},
+    "魔焰掌":     {"type": "攻击", "grade": "黄级上品", "stat_bonus": {"physique": 3}, "effect": {"attack_scale": "physique", "multiplier": 2.2, "self_damage": True}},
+    "火云护体":   {"type": "防御", "grade": "黄级上品", "stat_bonus": {"physique": 2}, "effect": {"defense_scale": "physique", "reflect": True}},
+
+    "合欢心法":   {"type": "修炼", "grade": "黄级上品", "stat_bonus": {"fortune": 1, "cultivation_speed": 0.05}, "effect": {"cultivation_bonus": 0.05, "dual_bonus": True}},
+    "双修功法":   {"type": "特殊", "grade": "黄级上品", "stat_bonus": {"fortune": 2}, "effect": {"dual_cultivate": True, "cooldown_years": 2}},
+    "媚术":       {"type": "辅助", "grade": "黄级上品", "stat_bonus": {"fortune": 2}, "effect": {"debuff_scale": "fortune"}},
+
+    "噬魂心法":   {"type": "修炼", "grade": "黄级上品", "stat_bonus": {"soul": 3}, "effect": {"cultivation_bonus_scale": "soul"}},
+    "神识冲击":   {"type": "攻击", "grade": "黄级上品", "stat_bonus": {"soul": 2}, "effect": {"attack_scale": "soul", "ignore_defense": True, "multiplier": 2.0}},
+    "神识壁垒":   {"type": "防御", "grade": "黄级上品", "stat_bonus": {"soul": 2}, "effect": {"defense_scale": "soul", "anti_mental": True}},
+
+    "太虚真经":   {"type": "修炼", "grade": "玄级上品", "stat_bonus": {"comprehension": 3, "cultivation_speed": 0.50}, "effect": {"cultivation_bonus": 0.50, "single_root_only": True, "realm_scale": True}},
+    "太虚剑意":   {"type": "攻击", "grade": "玄级上品", "stat_bonus": {"comprehension": 4}, "effect": {"attack_scale": "comprehension", "multiplier": 3.0}},
+    "虚空遁形":   {"type": "辅助", "grade": "玄级上品", "stat_bonus": {"escape_rate": 30}, "effect": {"invincible": True, "cost": "extreme"}},
+
+    "混沌心法":   {"type": "修炼", "grade": "地级下品", "stat_bonus": {"comprehension": 2, "physique": 2, "cultivation_speed": 0.60}, "effect": {"cultivation_bonus": 0.60, "variant_only": True, "dual_element": True}},
+    "混沌气团":   {"type": "攻击", "grade": "地级下品", "stat_bonus": {"comprehension": 3, "physique": 3}, "effect": {"multi_element": True, "ignore_single_defense": True}},
+    "混沌护体":   {"type": "防御", "grade": "地级下品", "stat_bonus": {"physique": 4}, "effect": {"random_element_shield": True}},
+
+    "天机心法":   {"type": "修炼", "grade": "玄级中品", "stat_bonus": {"fortune": 3, "cultivation_speed": 0.30}, "effect": {"cultivation_bonus_scale": "fortune", "enlighten_chance": True}},
+    "天机预演":   {"type": "辅助", "grade": "玄级中品", "stat_bonus": {"fortune": 3, "escape_rate": 20}, "effect": {"dodge_bonus_scale": "fortune"}},
+    "因果斩":     {"type": "攻击", "grade": "玄级中品", "stat_bonus": {"soul": 3, "comprehension": 2}, "effect": {"ignore_realm": True, "lifespan_cost": 10}},
+
+    "无极心法":   {"type": "修炼", "grade": "玄级下品", "stat_bonus": {"comprehension": 1, "physique": 1, "fortune": 1, "bone": 1, "soul": 1, "cultivation_speed": 0.40}, "effect": {"cultivation_bonus": 0.40, "all_stat_bonus": True}},
+    "无极拳":     {"type": "攻击", "grade": "玄级下品", "stat_bonus": {"physique": 2, "bone": 2}, "effect": {"attack_scale": "all_stats"}},
+    "无极护体":   {"type": "防御", "grade": "玄级下品", "stat_bonus": {"physique": 2, "soul": 2}, "effect": {"defense_scale": "all_stats"}},
+
+    "轮回心法":   {"type": "修炼", "grade": "玄级上品", "stat_bonus": {"bone": 3, "cultivation_speed": 0.20}, "effect": {"cultivation_bonus_per_death": 0.20}},
+    "死亡凝视":   {"type": "攻击", "grade": "玄级上品", "stat_bonus": {"soul": 3}, "effect": {"ignore_defense_chance": 0.3, "attack_scale": "soul"}},
+    "不死之身":   {"type": "防御", "grade": "玄级上品", "stat_bonus": {"bone": 3, "physique": 2}, "effect": {"revive_chance": 0.3, "once_per_realm": True}},
+}
+
+
+def get_technique_cost(name: str, current_stage: str) -> tuple[int, int]:
+    info = TECHNIQUES.get(name, {})
+    grade = info.get("grade", "黄级上品")
+    mult = GRADE_COST_MULTIPLIER.get(grade, 1.0)
+    stones = int(STAGE_COST_BASE.get(current_stage, 500) * mult)
+    years = STAGE_TIME_BASE.get(current_stage, 1)
+    return stones, years
+
+
+def next_stage(stage: str) -> str | None:
+    idx = TECHNIQUE_STAGES.index(stage) if stage in TECHNIQUE_STAGES else -1
+    if idx < 0 or idx >= len(TECHNIQUE_STAGES) - 1:
+        return None
+    return TECHNIQUE_STAGES[idx + 1]
+
+
+def calc_technique_stat_bonus(techniques_json: list) -> dict:
+    total = {}
+    for t in techniques_json:
+        if not t.get("equipped"):
+            continue
+        name = t.get("name", "")
+        stage = t.get("stage", "入门")
+        info = TECHNIQUES.get(name, {})
+        base_bonus = info.get("stat_bonus", {})
+        stage_mult = STAGE_STAT_MULTIPLIER.get(stage, 1)
+        for stat, val in base_bonus.items():
+            total[stat] = total.get(stat, 0) + val * stage_mult
+    return total
 
 
 def _req(min_realm=None, spirit_roots=None, min_stat=None, min_fortune=None,
@@ -199,7 +261,10 @@ def check_requirements(player: dict, sect_name: str) -> tuple[bool, str]:
         return False, "此宗门只接纳曾经坐化重生之人。"
 
     if req["needs_adventure"]:
-        return False, "此宗门入口隐秘，需通过特殊奇遇方可发现。"
+        import json
+        discovered = json.loads(player.get("discovered_sects") or "[]")
+        if sect_name not in discovered:
+            return False, "此宗门入口隐秘，需通过特殊奇遇方可发现。"
 
     if req["min_realm"]:
         if get_realm_index(player["realm"]) < get_realm_index(req["min_realm"]):

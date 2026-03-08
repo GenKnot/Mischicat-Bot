@@ -3,7 +3,7 @@ import random
 import time
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from utils.character import (
     QUESTIONS, calc_stats, roll_spirit_root, SPIRIT_ROOT_SPEED, REALM_LIFESPAN,
@@ -16,7 +16,7 @@ from utils.realms import (
     cultivation_needed, lifespan_max_for_realm, next_realm,
     roll_breakthrough, apply_failure,
 )
-from utils.views import MainMenuView, ProfileView
+from utils.views import MainMenuView, ProfileView, CultivateView, ClaimCultivationView, DualCultivateInviteView, YinYangView
 from utils.db import get_conn
 from utils.world import CITIES
 
@@ -25,12 +25,14 @@ class CultivationCog(commands.Cog, name="Cultivation"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._creating = set()
+        self._notified: set[str] = set()  # track already-notified players this session
 
     def _get_player(self, discord_id: str):
         with get_conn() as conn:
-            return conn.execute(
+            row = conn.execute(
                 "SELECT * FROM players WHERE discord_id = ?", (discord_id,)
             ).fetchone()
+            return dict(row) if row else None
 
     def _settle_time(self, player):
         now = time.time()
@@ -56,8 +58,11 @@ class CultivationCog(commands.Cog, name="Cultivation"):
 
     async def _check_dead(self, ctx, player) -> bool:
         if player["lifespan"] <= 0 or player["is_dead"]:
+            uid = str(ctx.author.id)
+            if await self._try_yinyang(ctx, player, uid):
+                return True
             with get_conn() as conn:
-                conn.execute("UPDATE players SET is_dead = 1 WHERE discord_id = ?", (str(ctx.author.id),))
+                conn.execute("UPDATE players SET is_dead = 1 WHERE discord_id = ?", (uid,))
                 conn.commit()
             await ctx.send(
                 f"{ctx.author.mention} 道友 **{player['name']}** 寿元已尽，魂归天道。\n"
@@ -65,6 +70,24 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             )
             return True
         return False
+
+    async def _try_yinyang(self, ctx, player, uid: str) -> bool:
+        import random as _r
+        import json
+        if player.get("has_bahongchen") or player.get("rebirth_count", 0) > 0:
+            return False
+        if _r.random() > 0.0003:
+            return False
+        from utils.events.adventure import YINYANG_EVENT, YINYANG_FINALE
+        from cogs.explore import ExploreView
+        embed = discord.Embed(
+            title=f"✦ {YINYANG_EVENT['title']} ✦",
+            description=YINYANG_EVENT["desc"],
+            color=discord.Color.dark_purple(),
+        )
+        await ctx.send(ctx.author.mention, embed=embed,
+                       view=YinYangView(ctx.author, YINYANG_EVENT, YINYANG_FINALE, player, self, uid))
+        return True
 
     def _can_breakthrough(self, player) -> bool:
         return player["cultivation"] >= cultivation_needed(player["realm"])
@@ -113,6 +136,10 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         embed.add_field(name="神识", value=player["soul"], inline=True)
         virgin_label = ("处男" if player["gender"] == "男" else "处女") if player["is_virgin"] else ("非处男" if player["gender"] == "男" else "非处女")
         embed.add_field(name="身", value=virgin_label, inline=True)
+        if player.get("escape_rate", 0) > 0:
+            embed.add_field(name="逃跑成功率", value=f"+{player['escape_rate']}%", inline=True)
+        if player.get("has_bahongchen"):
+            embed.add_field(name="奇遇", value="阴阳两界 · 已触发", inline=False)
         await interaction.followup.send(
             interaction.user.mention,
             embed=embed,
@@ -133,9 +160,31 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         if player["cultivating_until"] and now < player["cultivating_until"]:
             remaining = seconds_to_years(player["cultivating_until"] - now)
             return await interaction.followup.send(f"道友正在闭关，还剩约 **{remaining:.1f} 年**，可使用 `cat!停止` 提前结束。")
-        years = 1
+
+        bonus = get_cultivation_bonus(uid, player["current_city"], player.get("cave"))
+        embed = discord.Embed(
+            title="✦ 选择闭关时长 ✦",
+            description=(
+                f"当前寿元：**{player['lifespan']} 年**\n"
+                f"修炼加成：**+{int(bonus * 100)}%**\n\n"
+                "请选择本次闭关时长："
+            ),
+            color=discord.Color.teal(),
+        )
+        await interaction.followup.send(embed=embed, view=CultivateView(interaction.user, self, player))
+
+    async def start_cultivate(self, interaction: discord.Interaction, years: int):
+        """Called by CultivateButton after user picks a duration."""
+        uid = str(interaction.user.id)
+        player = self._get_player(uid)
+        if not player:
+            return await interaction.followup.send("尚未踏入修仙之路。")
+        updates, _ = self._settle_time(player)
+        self._apply_updates(uid, updates)
+        player = self._get_player(uid)
         if player["lifespan"] < years:
-            return await interaction.followup.send(f"寿元不足，无法修炼。")
+            return await interaction.followup.send(f"寿元不足，无法修炼 {years} 年。")
+        now = time.time()
         cultivating_until = now + years_to_seconds(years)
         bonus = get_cultivation_bonus(uid, player["current_city"], player.get("cave"))
         gain = int(calc_cultivation_gain(years, player["comprehension"], player["spirit_root_type"]) * (1 + bonus))
@@ -149,10 +198,43 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             """, (new_cultivation, new_lifespan, cultivating_until, years, now, uid))
             conn.commit()
         needed = cultivation_needed(player["realm"])
+        real_hours = years * 2
         await interaction.followup.send(
-            f"{interaction.user.mention} **{player['name']}** 开始闭关修炼 **1 年**（现实2小时）。\n"
-            f"修为进度：{player['cultivation']}/{needed} → {new_cultivation}/{needed}"
+            f"{interaction.user.mention} **{player['name']}** 开始闭关修炼 **{years} 年**（现实 {real_hours} 小时）。\n"
+            f"修为进度：{player['cultivation']}/{needed} → {new_cultivation}/{needed}\n"
+            f"闭关结束后将收到通知，届时可领取修炼成果。"
         )
+
+    async def claim_cultivation(self, interaction: discord.Interaction, uid: str):
+        """Called when player clicks 领取 in the DM notification."""
+        player = self._get_player(uid)
+        if not player:
+            return await interaction.response.send_message("角色不存在。")
+        now = time.time()
+        if player["cultivating_until"] and now < player["cultivating_until"]:
+            return await interaction.response.send_message("闭关尚未结束，请耐心等待。")
+        if not player["cultivating_until"]:
+            return await interaction.response.send_message("当前没有待领取的修炼成果。")
+        with get_conn() as conn:
+            conn.execute(
+                "UPDATE players SET cultivating_until = NULL, cultivating_years = NULL WHERE discord_id = ?",
+                (uid,)
+            )
+            conn.commit()
+        self._notified.discard(uid)
+        player = self._get_player(uid)
+        needed = cultivation_needed(player["realm"])
+        can_bt = self._can_breakthrough(player)
+        embed = discord.Embed(
+            title="✦ 修炼成果已领取 ✦",
+            description=f"**{player['name']}** 出关！",
+            color=discord.Color.teal(),
+        )
+        embed.add_field(name="当前修为", value=f"{player['cultivation']} / {needed}", inline=True)
+        embed.add_field(name="剩余寿元", value=f"{player['lifespan']} 年", inline=True)
+        if can_bt:
+            embed.add_field(name="提示", value="修为已圆满，可尝试突破！", inline=False)
+        await interaction.response.send_message(embed=embed)
 
     async def send_breakthrough(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
@@ -246,6 +328,29 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         has_player = player is not None and not player["is_dead"]
         can_bt = has_player and self._can_breakthrough(player)
 
+        import json
+        has_dual = has_player and any(
+            (t if isinstance(t, str) else t.get("name", "")) == "双修功法"
+            for t in json.loads(player["techniques"] or "[]")
+        )
+
+        city_players = []
+        if has_player:
+            with get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT discord_id, name, realm, cultivation FROM players "
+                    "WHERE current_city = ? AND is_dead = 0 AND discord_id != ?",
+                    (player["current_city"], uid)
+                ).fetchall()
+            city_players = [dict(r) for r in rows]
+
+        dual_section = (
+            "\n\n**双修系统**\n"
+            "· 使用 `cat!双修 @对方` 邀请他人进行双修\n"
+            "· 双方皆为清白之身时修为暴涨（10-20倍），一方清白5倍，否则1.2倍\n"
+            "· 双修冷却 2 游戏年，闭关中无法双修"
+        ) if has_dual else ""
+
         embed = discord.Embed(
             title="✦ 修仙长生路 ✦",
             description=(
@@ -271,12 +376,19 @@ class CultivationCog(commands.Cog, name="Cultivation"):
                 "· 使用 `cat!我的居所` 查看已有居所与加成详情\n\n"
                 "**宗门系统**\n"
                 "· 满足条件后可加入宗门，获得专属事件与功法加成\n"
-                "· 使用 `cat!宗门` 查看天下宗门信息"
+                "· 使用 `cat!宗门列表` 查看天下宗门，`cat!加入宗门 [名]` 加入\n"
+                "· 加入后自动获得全部3本功法，`cat!门派功法` 可补领遗漏\n\n"
+                "**功法系统**\n"
+                "· 最多装备5本功法，装备后获得属性加成\n"
+                "· `cat!我的功法` 查看功法　`cat!装备功法 [名]` 装备/卸下\n"
+                "· `cat!修炼功法 [名]` 消耗灵石与寿元提升功法阶段（入门→破限）\n"
+                "· `cat!功法属性` 查看当前装备功法的总属性加成"
+                + dual_section
             ),
             color=discord.Color.teal(),
         )
         embed.set_footer(text="天道有常，长生路远，望道友珍重。")
-        await ctx.send(embed=embed, view=MainMenuView(ctx.author, has_player, can_bt, self))
+        await ctx.send(embed=embed, view=MainMenuView(ctx.author, has_player, can_bt, self, player, city_players))
 
     @commands.command(name="查看")
     async def view(self, ctx):
@@ -325,6 +437,10 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         embed.add_field(name="神识", value=player["soul"], inline=True)
         virgin_label = ("处男" if player["gender"] == "男" else "处女") if player["is_virgin"] else ("非处男" if player["gender"] == "男" else "非处女")
         embed.add_field(name="身", value=virgin_label, inline=True)
+        if player.get("escape_rate", 0) > 0:
+            embed.add_field(name="逃跑成功率", value=f"+{player['escape_rate']}%", inline=True)
+        if player.get("has_bahongchen"):
+            embed.add_field(name="奇遇", value="阴阳两界 · 已触发", inline=False)
 
         await ctx.send(
             ctx.author.mention,
@@ -499,6 +615,186 @@ class CultivationCog(commands.Cog, name="Cultivation"):
                 f"修为：{new_cultivation}/{needed}　寿元剩余：{new_lifespan} 年"
             )
 
+    @commands.command(name="双修")
+    async def dual_cultivate(self, ctx, target: discord.Member = None):
+        uid = str(ctx.author.id)
+
+        if not target:
+            return await ctx.send(f"{ctx.author.mention} 用法：`cat!双修 @对方`")
+        if target == ctx.author:
+            return await ctx.send(f"{ctx.author.mention} 无法与自己双修。")
+        if target.bot:
+            return await ctx.send(f"{ctx.author.mention} 对方不是修士。")
+
+        import json
+        inviter = self._get_player(uid)
+        target_player = self._get_player(str(target.id))
+
+        if not inviter or inviter["is_dead"]:
+            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路或已坐化。")
+        if not target_player or target_player["is_dead"]:
+            return await ctx.send(f"{ctx.author.mention} 对方尚未踏入修仙之路或已坐化。")
+
+        inv_techs = json.loads(inviter["techniques"] or "[]")
+        tgt_techs = json.loads(target_player["techniques"] or "[]")
+
+        inv_has = any(t if isinstance(t, str) else t.get("name") == "双修功法" for t in (json.loads(inviter["techniques"] or "[]") if isinstance(json.loads(inviter["techniques"] or "[]"), list) else []))
+        tgt_has = any(t if isinstance(t, str) else t.get("name") == "双修功法" for t in (json.loads(target_player["techniques"] or "[]") if isinstance(json.loads(target_player["techniques"] or "[]"), list) else []))
+
+        def _has_dual(raw):
+            data = json.loads(raw or "[]")
+            for t in data:
+                name = t if isinstance(t, str) else t.get("name", "")
+                if name == "双修功法":
+                    return True
+            return False
+
+        if not _has_dual(inviter["techniques"]) and not _has_dual(target_player["techniques"]):
+            return await ctx.send(f"{ctx.author.mention} 双方均未习得「双修功法」，无法双修。")
+
+        if inviter["current_city"] != target_player["current_city"]:
+            return await ctx.send(
+                f"{ctx.author.mention} 双修需在同一城市，请先找到对方所在之处。"
+            )
+
+        now = time.time()
+        cooldown_secs = years_to_seconds(2)
+        for p, mention in [(inviter, ctx.author.mention), (target_player, target.mention)]:
+            if p["last_dual_cultivate"] and now - p["last_dual_cultivate"] < cooldown_secs:
+                remaining = seconds_to_years(cooldown_secs - (now - p["last_dual_cultivate"]))
+                return await ctx.send(f"{mention} 双修冷却中，还需等待 **{remaining:.1f} 游戏年**。")
+
+        for p, mention in [(inviter, ctx.author.mention), (target_player, target.mention)]:
+            if p["cultivating_until"] and now < p["cultivating_until"]:
+                return await ctx.send(f"{mention} 正在闭关，无法双修。")
+
+        if inviter["lifespan"] < 1:
+            return await ctx.send(f"{ctx.author.mention} 寿元不足，无法双修。")
+        if target_player["lifespan"] < 1:
+            return await ctx.send(f"{ctx.author.mention} 对方寿元不足，无法双修。")
+
+        inv_virgin = bool(inviter["is_virgin"])
+        tgt_virgin = bool(target_player["is_virgin"])
+        both_virgin = inv_virgin and tgt_virgin
+        if both_virgin:
+            multiplier = random.uniform(10, 20)
+        elif inv_virgin or tgt_virgin:
+            multiplier = 5.0
+        else:
+            multiplier = 1.2
+
+        if both_virgin:
+            mult_desc = f"双方皆为清白之身，阴阳交融，修为暴涨（**{multiplier:.1f}倍**）"
+        elif inv_virgin or tgt_virgin:
+            mult_desc = "一方清白之身，修为大增（**5倍**）"
+        else:
+            mult_desc = "双修加持，修为略有提升（**1.2倍**）"
+
+        embed = discord.Embed(
+            title="✦ 双修邀请 ✦",
+            description=(
+                f"**{ctx.author.display_name}** 邀请 {target.mention} 进行双修。\n\n"
+                f"{mult_desc}\n"
+                f"双修将消耗双方各 **1 游戏年** 寿元，持续现实 **2 小时**。\n\n"
+                f"{target.mention} 是否接受？"
+            ),
+            color=discord.Color.pink(),
+        )
+        await ctx.send(
+            target.mention,
+            embed=embed,
+            view=DualCultivateInviteView(self, ctx.author, target, multiplier, both_virgin),
+        )
+
+    async def do_dual_cultivate(
+        self,
+        interaction: discord.Interaction,
+        inviter: discord.User,
+        target: discord.User,
+        multiplier: float,
+        both_virgin: bool,
+    ):
+        """双方确认后执行双修逻辑。"""
+        import json
+        now = time.time()
+        inv_uid = str(inviter.id)
+        tgt_uid = str(target.id)
+
+        inv_p = self._get_player(inv_uid)
+        tgt_p = self._get_player(tgt_uid)
+
+        if not inv_p or not tgt_p:
+            return await interaction.followup.send("双修失败：角色数据异常。")
+
+        cooldown_secs = years_to_seconds(2)
+        for p, name in [(inv_p, inviter.display_name), (tgt_p, target.display_name)]:
+            if p["lifespan"] < 1:
+                return await interaction.followup.send(f"双修失败：**{name}** 寿元不足。")
+            if p["last_dual_cultivate"] and now - p["last_dual_cultivate"] < cooldown_secs:
+                return await interaction.followup.send(f"双修失败：**{name}** 冷却未结束。")
+            if p["cultivating_until"] and now < p["cultivating_until"]:
+                return await interaction.followup.send(f"双修失败：**{name}** 正在闭关。")
+
+        inv_virgin = bool(inv_p["is_virgin"])
+        tgt_virgin = bool(tgt_p["is_virgin"])
+        both_virgin = inv_virgin and tgt_virgin
+        if both_virgin:
+            multiplier = random.uniform(10, 20)
+        elif inv_virgin or tgt_virgin:
+            multiplier = 5.0
+        else:
+            multiplier = 1.2
+
+        years = 1
+        cultivating_until = now + years_to_seconds(years)
+
+        def _calc(p):
+            base = calc_cultivation_gain(years, p["comprehension"], p["spirit_root_type"])
+            bonus = get_cultivation_bonus(str(p["discord_id"]), p["current_city"], p.get("cave"))
+            return int(base * (1 + bonus) * multiplier)
+
+        inv_gain = _calc(inv_p)
+        tgt_gain = _calc(tgt_p)
+
+        with get_conn() as conn:
+            for p, gain, uid in [(inv_p, inv_gain, inv_uid), (tgt_p, tgt_gain, tgt_uid)]:
+                new_cult = p["cultivation"] + gain
+                new_life = p["lifespan"] - years
+                conn.execute("""
+                    UPDATE players SET
+                        cultivation = ?, lifespan = ?,
+                        cultivating_until = ?, cultivating_years = ?,
+                        last_dual_cultivate = ?, is_virgin = 0, last_active = ?
+                    WHERE discord_id = ?
+                """, (new_cult, new_life, cultivating_until, years, now, now, uid))
+            conn.commit()
+
+        inv_needed = cultivation_needed(inv_p["realm"])
+        tgt_needed = cultivation_needed(tgt_p["realm"])
+
+        virgin_note = ""
+        if both_virgin:
+            virgin_note = "\n双方清白之身已破，此后双修倍率将降低。"
+        elif inv_virgin or tgt_virgin:
+            virgin_note = "\n清白之身已破，此后双修倍率将降低。"
+
+        embed = discord.Embed(
+            title="✦ 双修开始 ✦",
+            description=f"阴阳交融，天地共鸣，双修持续 **1 游戏年**（现实 2 小时）。{virgin_note}",
+            color=discord.Color.pink(),
+        )
+        embed.add_field(
+            name=inviter.display_name,
+            value=f"修为 +{inv_gain}（{inv_p['cultivation']}/{inv_needed} → {inv_p['cultivation']+inv_gain}/{inv_needed}）",
+            inline=False,
+        )
+        embed.add_field(
+            name=target.display_name,
+            value=f"修为 +{tgt_gain}（{tgt_p['cultivation']}/{tgt_needed} → {tgt_p['cultivation']+tgt_gain}/{tgt_needed}）",
+            inline=False,
+        )
+        await interaction.followup.send(embed=embed)
+
     @commands.command(name="移动")
     async def travel(self, ctx, *, city_name: str = None):
         uid = str(ctx.author.id)
@@ -584,6 +880,10 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         embed.add_field(name="探险", value=(
             "`cat!探险` — 随机触发事件（每5游戏年8次）"
         ), inline=False)
+        embed.add_field(name="双修", value=(
+            "`cat!双修 @对方` — 邀请他人进行双修（需一方持有「双修功法」）\n"
+            "· 双方皆为清白之身时修为暴涨，冷却 2 游戏年"
+        ), inline=False)
         embed.add_field(name="移动", value=(
             "`cat!移动 [城市名]` — 前往目标城市\n"
             "`cat!世界` — 查看天下城市列表"
@@ -593,7 +893,14 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             "`cat!宗门详情 [宗门名]` — 查看入门要求与功法\n"
             "`cat!加入宗门 [宗门名]` — 加入宗门\n"
             "`cat!退出宗门` — 离开宗门\n"
-            "`cat!我的功法` — 查看已习得功法"
+            "`cat!门派功法` — 查看宗门功法，若有缺漏会自动补发"
+        ), inline=False)
+        embed.add_field(name="功法", value=(
+            "`cat!我的功法` — 查看已习得功法与装备状态\n"
+            "`cat!装备功法 [功法名]` — 装备/卸下功法（最多5本）\n"
+            "`cat!修炼功法 [功法名]` — 消耗灵石与寿元提升功法阶段\n"
+            "　　阶段：入门→熟练→精通→小成→大成→圆满→破限\n"
+            "`cat!功法属性` — 查看已装备功法的属性加成"
         ), inline=False)
         embed.add_field(name="居所", value=(
             "`cat!买房` — 在当前城市置业（声望≥300）\n"
@@ -605,6 +912,11 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             "`cat!skip` — 跳过当前曲目\n"
             "`cat!stop` — 停止播放"
         ), inline=False)
+        embed.add_field(name="奇遇", value=(
+            "传闻修士坐化之际，有极小概率触发神秘奇遇。\n"
+            "经历者将获得永久跨世加成，无论几度轮回皆不消散。\n"
+            "至于是何奇遇……只有亲历者方知。"
+        ), inline=False)
         embed.set_footer(text="现实 2 小时 = 游戏 1 年 · 寿元归零则坐化")
         await ctx.send(embed=embed)
 
@@ -612,7 +924,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
     async def create_character(self, ctx):
         uid = str(ctx.author.id)
 
-        if self._get_player(uid):
+        if self._get_player(uid) and not self._get_player(uid)["is_dead"]:
             return await ctx.send(f"{ctx.author.mention} 道友已踏入修仙之路，无需重新创建。")
 
         if uid in self._creating:
@@ -653,21 +965,45 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             now = time.time()
             starting_city = random.choice(CITIES)["name"]
 
+            old = self._get_player(uid)
             with get_conn() as conn:
-                conn.execute("""
-                    INSERT INTO players (
-                        discord_id, name, gender, spirit_root, spirit_root_type,
-                        comprehension, physique, fortune, bone, soul,
-                        lifespan, lifespan_max, spirit_stones,
-                        created_at, last_active, current_city
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    uid, name, gender, spirit_root, root_type,
-                    stats["comprehension"], stats["physique"],
-                    stats["fortune"], stats["bone"], stats["soul"],
-                    lifespan, lifespan, stats["spirit_stones"],
-                    now, now, starting_city,
-                ))
+                if old and old["is_dead"]:
+                    conn.execute("""
+                        UPDATE players SET
+                            name=?, gender=?, spirit_root=?, spirit_root_type=?,
+                            comprehension=?, physique=?, fortune=?, bone=?, soul=?,
+                            lifespan=?, lifespan_max=?, spirit_stones=?,
+                            cultivation=0, realm='炼气期1层',
+                            cultivating_until=NULL, cultivating_years=NULL,
+                            is_dead=0, is_virgin=1, rebirth_count=rebirth_count,
+                            sect=NULL, sect_rank=NULL, techniques='[]',
+                            cultivation_overflow=0, current_city=?,
+                            explore_count=0, explore_reset_year=0,
+                            reputation=0, cave=NULL,
+                            created_at=?, last_active=?
+                        WHERE discord_id=?
+                    """, (
+                        name, gender, spirit_root, root_type,
+                        stats["comprehension"], stats["physique"],
+                        stats["fortune"], stats["bone"], stats["soul"],
+                        lifespan, lifespan, stats["spirit_stones"],
+                        starting_city, now, now, uid,
+                    ))
+                else:
+                    conn.execute("""
+                        INSERT INTO players (
+                            discord_id, name, gender, spirit_root, spirit_root_type,
+                            comprehension, physique, fortune, bone, soul,
+                            lifespan, lifespan_max, spirit_stones,
+                            created_at, last_active, current_city
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        uid, name, gender, spirit_root, root_type,
+                        stats["comprehension"], stats["physique"],
+                        stats["fortune"], stats["bone"], stats["soul"],
+                        lifespan, lifespan, stats["spirit_stones"],
+                        now, now, starting_city,
+                    ))
                 conn.commit()
 
             speed_label = {
@@ -696,6 +1032,42 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             await ctx.send(f"{ctx.author.mention} 响应超时，创建已取消。")
         finally:
             self._creating.discard(uid)
+
+
+    @tasks.loop(minutes=1)
+    async def _cultivation_notifier(self):
+        """Every minute, check for players whose cultivation just finished and DM them."""
+        now = time.time()
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT discord_id, name FROM players WHERE cultivating_until IS NOT NULL AND cultivating_until <= ? AND is_dead = 0",
+                (now,)
+            ).fetchall()
+        for row in rows:
+            uid = row["discord_id"]
+            if uid in self._notified:
+                continue
+            self._notified.add(uid)
+            try:
+                user = await self.bot.fetch_user(int(uid))
+                embed = discord.Embed(
+                    title="✦ 闭关结束 ✦",
+                    description=f"**{row['name']}** 的闭关已结束，请领取修炼成果！",
+                    color=discord.Color.gold(),
+                )
+                await user.send(embed=embed, view=ClaimCultivationView(self, uid))
+            except Exception:
+                pass  # DM may be disabled; silently skip
+
+    @_cultivation_notifier.before_loop
+    async def _before_notifier(self):
+        await self.bot.wait_until_ready()
+
+    async def cog_load(self):
+        self._cultivation_notifier.start()
+
+    async def cog_unload(self):
+        self._cultivation_notifier.cancel()
 
 
 async def setup(bot):

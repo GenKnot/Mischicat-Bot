@@ -5,7 +5,26 @@ import discord
 from discord.ext import commands
 
 from utils.db import get_conn
-from utils.sects import SECTS, TECHNIQUES, check_requirements
+from utils.sects import SECTS, TECHNIQUES, check_requirements, get_technique_cost, next_stage, calc_technique_stat_bonus, TECHNIQUE_STAGES
+from utils.character import years_to_seconds, seconds_to_years
+
+
+def _parse_techniques(raw) -> list:
+    data = json.loads(raw or "[]")
+    result = []
+    for item in data:
+        if isinstance(item, str):
+            result.append({"name": item, "grade": TECHNIQUES.get(item, {}).get("grade", "黄级上品"), "stage": "入门", "equipped": True})
+        elif isinstance(item, dict):
+            result.append(item)
+    return result
+
+
+def _save_techniques(uid: str, techniques: list):
+    with get_conn() as conn:
+        conn.execute("UPDATE players SET techniques = ? WHERE discord_id = ?",
+                     (json.dumps(techniques, ensure_ascii=False), uid))
+        conn.commit()
 
 
 class SectCog(commands.Cog, name="Sect"):
@@ -14,9 +33,10 @@ class SectCog(commands.Cog, name="Sect"):
 
     def _get_player(self, discord_id: str):
         with get_conn() as conn:
-            return conn.execute(
+            row = conn.execute(
                 "SELECT * FROM players WHERE discord_id = ?", (discord_id,)
             ).fetchone()
+            return dict(row) if row else None
 
     @commands.command(name="宗门列表")
     async def sect_list(self, ctx):
@@ -62,7 +82,7 @@ class SectCog(commands.Cog, name="Sect"):
         tech_lines = []
         for t in sect["techniques"]:
             info = TECHNIQUES.get(t, {})
-            tech_lines.append(f"**{t}**（{info.get('type', '未知')}）")
+            tech_lines.append(f"**{t}**（{info.get('grade', '?')} · {info.get('type', '未知')}）")
 
         embed = discord.Embed(
             title=f"✦ {name} ✦",
@@ -95,10 +115,18 @@ class SectCog(commands.Cog, name="Sect"):
         if not ok:
             return await ctx.send(f"{ctx.author.mention} 无法加入 **{name}**：{msg}")
 
-        starter = sect["techniques"][0]
-        techniques = json.loads(player["techniques"] or "[]")
-        if starter not in techniques:
-            techniques.append(starter)
+        techniques = _parse_techniques(player["techniques"])
+        existing_names = {t["name"] for t in techniques}
+        new_techs = []
+        for t_name in sect["techniques"]:
+            if t_name not in existing_names:
+                new_techs.append(t_name)
+                techniques.append({
+                    "name": t_name,
+                    "grade": TECHNIQUES.get(t_name, {}).get("grade", "黄级上品"),
+                    "stage": "入门",
+                    "equipped": len([x for x in techniques if x.get("equipped")]) < 5,
+                })
 
         with get_conn() as conn:
             conn.execute(
@@ -107,9 +135,10 @@ class SectCog(commands.Cog, name="Sect"):
             )
             conn.commit()
 
+        tech_str = "、".join(f"**{t}**" for t in new_techs) if new_techs else "（已全部习得）"
         await ctx.send(
             f"{ctx.author.mention} 道友 **{player['name']}** 成功加入 **{name}**，成为外门弟子。\n"
-            f"获得入门功法：**{starter}**"
+            f"获得功法：{tech_str}"
         )
 
     @commands.command(name="退出宗门")
@@ -131,6 +160,50 @@ class SectCog(commands.Cog, name="Sect"):
 
         await ctx.send(f"{ctx.author.mention} 道友已离开 **{sect_name}**，功法仍在，但宗门资源不再可用。")
 
+    @commands.command(name="门派功法")
+    async def sect_techniques(self, ctx):
+        uid = str(ctx.author.id)
+        player = self._get_player(uid)
+
+        if not player:
+            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
+        if not player["sect"]:
+            return await ctx.send(f"{ctx.author.mention} 道友尚未加入任何宗门。")
+
+        sect = SECTS.get(player["sect"])
+        if not sect:
+            return await ctx.send("宗门数据异常。")
+
+        techniques = _parse_techniques(player["techniques"])
+        existing_names = {t["name"] for t in techniques}
+        new_techs = []
+        for t_name in sect["techniques"]:
+            if t_name not in existing_names:
+                new_techs.append(t_name)
+                techniques.append({
+                    "name": t_name,
+                    "grade": TECHNIQUES.get(t_name, {}).get("grade", "黄级上品"),
+                    "stage": "入门",
+                    "equipped": len([x for x in techniques if x.get("equipped")]) < 5,
+                })
+
+        if new_techs:
+            _save_techniques(uid, techniques)
+            tech_str = "、".join(f"**{t}**" for t in new_techs)
+            await ctx.send(f"{ctx.author.mention} 从 **{player['sect']}** 领悟了新功法：{tech_str}")
+        else:
+            lines = []
+            for t_name in sect["techniques"]:
+                info = TECHNIQUES.get(t_name, {})
+                lines.append(f"**{t_name}**（{info.get('grade', '?')} · {info.get('type', '未知')}）")
+            embed = discord.Embed(
+                title=f"✦ {player['sect']} 传承功法 ✦",
+                description="\n".join(lines),
+                color=discord.Color.teal(),
+            )
+            embed.set_footer(text="已全部习得。")
+            await ctx.send(embed=embed)
+
     @commands.command(name="我的功法")
     async def my_techniques(self, ctx):
         uid = str(ctx.author.id)
@@ -139,22 +212,164 @@ class SectCog(commands.Cog, name="Sect"):
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
 
-        techniques = json.loads(player["techniques"] or "[]")
+        techniques = _parse_techniques(player["techniques"])
         if not techniques:
             return await ctx.send(f"{ctx.author.mention} 道友尚未习得任何功法。")
 
         lines = []
         for t in techniques:
-            info = TECHNIQUES.get(t, {})
-            lines.append(f"**{t}**（{info.get('type', '未知')}）")
+            info = TECHNIQUES.get(t["name"], {})
+            equipped_mark = "✦" if t.get("equipped") else "○"
+            lines.append(
+                f"{equipped_mark} **{t['name']}**（{t.get('grade', '?')} · {info.get('type', '未知')}）"
+                f"　阶段：{t.get('stage', '入门')}"
+            )
 
         embed = discord.Embed(
             title=f"✦ {player['name']} 的功法 ✦",
             description="\n".join(lines),
             color=discord.Color.teal(),
         )
+        embed.set_footer(text="✦ 已装备　○ 未装备　最多装备5本　使用 cat!装备功法 [功法名] 切换")
         if player["sect"]:
-            embed.set_footer(text=f"宗门：{player['sect']} · {player['sect_rank']}")
+            embed.add_field(name="宗门", value=f"{player['sect']} · {player['sect_rank']}", inline=False)
+        await ctx.send(embed=embed)
+
+    @commands.command(name="装备功法")
+    async def equip_technique(self, ctx, *, name: str):
+        uid = str(ctx.author.id)
+        player = self._get_player(uid)
+
+        if not player:
+            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
+
+        techniques = _parse_techniques(player["techniques"])
+        target = next((t for t in techniques if t["name"] == name), None)
+        if not target:
+            return await ctx.send(f"{ctx.author.mention} 未习得功法「{name}」。")
+
+        if target.get("equipped"):
+            target["equipped"] = False
+            _save_techniques(uid, techniques)
+            return await ctx.send(f"{ctx.author.mention} 已卸下功法「**{name}**」。")
+
+        equipped_count = sum(1 for t in techniques if t.get("equipped"))
+        if equipped_count >= 5:
+            return await ctx.send(f"{ctx.author.mention} 已装备5本功法，请先卸下一本再装备新的。")
+
+        target["equipped"] = True
+        _save_techniques(uid, techniques)
+        await ctx.send(f"{ctx.author.mention} 已装备功法「**{name}**」。")
+
+    @commands.command(name="修炼功法")
+    async def train_technique(self, ctx, *, name: str):
+        uid = str(ctx.author.id)
+        player = self._get_player(uid)
+
+        if not player:
+            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
+        if player["is_dead"]:
+            return await ctx.send(f"{ctx.author.mention} 道友已坐化。")
+
+        now = time.time()
+        if player.get("cultivating_until") and now < player["cultivating_until"]:
+            return await ctx.send(f"{ctx.author.mention} 道友正在闭关，无法修炼功法。")
+
+        techniques = _parse_techniques(player["techniques"])
+        target = next((t for t in techniques if t["name"] == name), None)
+        if not target:
+            return await ctx.send(f"{ctx.author.mention} 未习得功法「{name}」。")
+
+        current_stage = target.get("stage", "入门")
+        nxt = next_stage(current_stage)
+        if not nxt:
+            return await ctx.send(f"{ctx.author.mention} 「{name}」已达最高阶段【破限】，无法继续修炼。")
+
+        stones_cost, years_cost = get_technique_cost(name, current_stage)
+
+        if player["spirit_stones"] < stones_cost:
+            return await ctx.send(
+                f"{ctx.author.mention} 灵石不足。\n"
+                f"「{name}」{current_stage} → {nxt} 需要 **{stones_cost} 灵石**，"
+                f"你当前只有 **{player['spirit_stones']} 灵石**。"
+            )
+
+        if player["lifespan"] < years_cost:
+            return await ctx.send(
+                f"{ctx.author.mention} 寿元不足。修炼「{name}」需消耗 **{years_cost} 年** 寿元。"
+            )
+
+        target["stage"] = nxt
+        cultivating_until = now + years_to_seconds(years_cost)
+        new_stones = player["spirit_stones"] - stones_cost
+        new_lifespan = player["lifespan"] - years_cost
+
+        with get_conn() as conn:
+            conn.execute(
+                "UPDATE players SET techniques = ?, spirit_stones = ?, lifespan = ?, "
+                "cultivating_until = ?, cultivating_years = ?, last_active = ? WHERE discord_id = ?",
+                (json.dumps(techniques, ensure_ascii=False), new_stones, new_lifespan,
+                 cultivating_until, years_cost, now, uid)
+            )
+            conn.commit()
+
+        info = TECHNIQUES.get(name, {})
+        grade = info.get("grade", "?")
+        real_hours = years_cost * 2
+        embed = discord.Embed(
+            title="✦ 功法修炼 ✦",
+            description=(
+                f"**{name}**（{grade}）\n"
+                f"{current_stage} ➜ **{nxt}**\n\n"
+                f"消耗灵石：**{stones_cost}**　剩余：{new_stones}\n"
+                f"消耗寿元：**{years_cost} 年**　剩余：{new_lifespan} 年\n"
+                f"修炼时间：现实 **{real_hours} 小时**\n\n"
+                "闭关结束后将收到通知。"
+            ),
+            color=discord.Color.teal(),
+        )
+        await ctx.send(ctx.author.mention, embed=embed)
+
+    @commands.command(name="功法属性")
+    async def technique_stats(self, ctx):
+        uid = str(ctx.author.id)
+        player = self._get_player(uid)
+
+        if not player:
+            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
+
+        techniques = _parse_techniques(player["techniques"])
+        equipped = [t for t in techniques if t.get("equipped")]
+        if not equipped:
+            return await ctx.send(f"{ctx.author.mention} 当前没有装备任何功法。")
+
+        bonus = calc_technique_stat_bonus(techniques)
+        stat_names = {
+            "comprehension": "悟性", "physique": "体魄", "fortune": "机缘",
+            "bone": "根骨", "soul": "神识", "escape_rate": "逃跑成功率",
+            "cultivation_speed": "修炼速度", "lifespan_bonus": "寿元加成",
+        }
+
+        lines = []
+        for t in equipped:
+            lines.append(f"✦ **{t['name']}**（{t.get('grade', '?')}）阶段：{t.get('stage', '入门')}")
+
+        bonus_lines = []
+        for stat, val in bonus.items():
+            label = stat_names.get(stat, stat)
+            if stat == "cultivation_speed":
+                bonus_lines.append(f"{label} +{val*100:.0f}%")
+            elif stat == "escape_rate":
+                bonus_lines.append(f"{label} +{val:.0f}%")
+            else:
+                bonus_lines.append(f"{label} +{val:.0f}")
+
+        embed = discord.Embed(
+            title="✦ 已装备功法属性加成 ✦",
+            color=discord.Color.teal(),
+        )
+        embed.add_field(name="已装备", value="\n".join(lines), inline=False)
+        embed.add_field(name="总加成", value="\n".join(bonus_lines) if bonus_lines else "无", inline=False)
         await ctx.send(embed=embed)
 
 

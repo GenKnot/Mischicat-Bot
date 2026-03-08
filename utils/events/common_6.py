@@ -1,4 +1,3 @@
-# 通用事件 81-100（每文件 20 个）
 from utils.events._base import _e, _c, _cond
 
 EVENTS = []

@@ -21,9 +21,10 @@ def _get_explore_limit(player) -> int:
 
 def _get_player(discord_id: str):
     with get_conn() as conn:
-        return conn.execute(
+        row = conn.execute(
             "SELECT * FROM players WHERE discord_id = ?", (discord_id,)
         ).fetchone()
+        return dict(row) if row else None
 
 
 def _apply_rewards(discord_id: str, rewards: dict):
@@ -43,6 +44,21 @@ def _apply_rewards(discord_id: str, rewards: dict):
         "reputation": "reputation",
     }
     for key, val in rewards.items():
+        if key == "discover_sect":
+            import json
+            with get_conn() as conn:
+                row = conn.execute(
+                    "SELECT discovered_sects FROM players WHERE discord_id = ?", (discord_id,)
+                ).fetchone()
+                discovered = json.loads(row["discovered_sects"] or "[]") if row else []
+                if val not in discovered:
+                    discovered.append(val)
+                    conn.execute(
+                        "UPDATE players SET discovered_sects = ? WHERE discord_id = ?",
+                        (json.dumps(discovered, ensure_ascii=False), discord_id)
+                    )
+                    conn.commit()
+            continue
         col = stat_map.get(key)
         if col:
             fields.append(f"{col} = MAX(0, {col} + ?)")

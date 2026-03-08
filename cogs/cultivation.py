@@ -16,7 +16,7 @@ from utils.realms import (
     cultivation_needed, lifespan_max_for_realm, next_realm,
     roll_breakthrough, apply_failure,
 )
-from utils.views import MainMenuView, ProfileView, CultivateView, ClaimCultivationView, DualCultivateInviteView, YinYangView
+from utils.views import MainMenuView, ProfileView, CultivateView, ClaimCultivationView, DualCultivateInviteView, YinYangView, _build_menu_embed
 from utils.db import get_conn
 from utils.world import CITIES
 
@@ -202,7 +202,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         await interaction.followup.send(
             f"{interaction.user.mention} **{player['name']}** 开始闭关修炼 **{years} 年**（现实 {real_hours} 小时）。\n"
             f"修为进度：{player['cultivation']}/{needed} → {new_cultivation}/{needed}\n"
-            f"闭关结束后将收到通知，届时可领取修炼成果。"
+            f"闭关结束后将收到通知。"
         )
 
     async def claim_cultivation(self, interaction: discord.Interaction, uid: str):
@@ -250,43 +250,61 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         if not self._can_breakthrough(player):
             needed = cultivation_needed(player["realm"])
             return await interaction.followup.send(f"修为尚未圆满，还差 **{needed - player['cultivation']}** 点。")
-        nxt = next_realm(player["realm"])
-        if not nxt:
-            return await interaction.followup.send("道友已至大道巅峰。")
-        success, outcome = roll_breakthrough(player["realm"], player["physique"], player["bone"], player["cultivation"])
-        if success:
-            new_lifespan_max = lifespan_max_for_realm(nxt)
-            lifespan_gain = max(0, new_lifespan_max - player["lifespan_max"])
-            new_lifespan = min(player["lifespan"] + lifespan_gain, new_lifespan_max)
-            with get_conn() as conn:
-                conn.execute("""
-                    UPDATE players SET realm = ?, cultivation = 0,
-                        lifespan = ?, lifespan_max = ?, last_active = ?
-                    WHERE discord_id = ?
-                """, (nxt, new_lifespan, new_lifespan_max, now, uid))
-                conn.commit()
-            await interaction.followup.send(
-                f"🎉 {interaction.user.mention} **{player['name']}** 突破成功！\n"
-                f"**{player['realm']}** ➜ **{nxt}**\n"
-                f"寿元上限提升至 {new_lifespan_max} 年，当前寿元 {new_lifespan} 年。"
-            )
-        else:
-            new_cultivation, new_lifespan, fail_msg = apply_failure(player["cultivation"], player["lifespan"], outcome)
-            with get_conn() as conn:
-                conn.execute("UPDATE players SET cultivation = ?, lifespan = ?, last_active = ? WHERE discord_id = ?",
-                             (new_cultivation, new_lifespan, now, uid))
-                conn.commit()
-            player = self._get_player(uid)
-            if player["lifespan"] <= 0:
+
+        result = await self._do_breakthrough_chain(uid, player, now)
+        await interaction.followup.send(result)
+
+    async def _do_breakthrough_chain(self, uid: str, player: dict, now: float) -> str:
+        chain = []
+        current = player
+        while True:
+            nxt = next_realm(current["realm"])
+            if not nxt:
+                chain.append(f"道友已至大道巅峰。")
+                break
+            success, outcome = roll_breakthrough(current["realm"], current["physique"], current["bone"], current["cultivation"])
+            if success:
+                new_lifespan_max = lifespan_max_for_realm(nxt)
+                lifespan_gain = max(0, new_lifespan_max - current["lifespan_max"])
+                new_lifespan = min(current["lifespan"] + lifespan_gain, new_lifespan_max)
                 with get_conn() as conn:
-                    conn.execute("UPDATE players SET is_dead = 1 WHERE discord_id = ?", (uid,))
+                    conn.execute("""
+                        UPDATE players SET realm = ?, cultivation = 0,
+                            lifespan = ?, lifespan_max = ?, last_active = ?
+                        WHERE discord_id = ?
+                    """, (nxt, new_lifespan, new_lifespan_max, now, uid))
                     conn.commit()
-                return await interaction.followup.send(f"道友 **{player['name']}** 突破失败，{fail_msg}\n寿元耗尽，魂归天道。")
-            needed = cultivation_needed(player["realm"])
-            await interaction.followup.send(
-                f"{interaction.user.mention} **{player['name']}** 突破失败。{fail_msg}\n"
-                f"修为：{new_cultivation}/{needed}　寿元剩余：{new_lifespan} 年"
-            )
+                lifespan_line = f"寿元上限→{new_lifespan_max}年" if lifespan_gain > 0 else f"寿元{new_lifespan}年"
+                chain.append(f"**{current['realm']}** ➜ **{nxt}**（{lifespan_line}）")
+                current = self._get_player(uid)
+                if not self._can_breakthrough(current):
+                    break
+            else:
+                new_cultivation, new_lifespan, fail_msg = apply_failure(current["cultivation"], current["lifespan"], outcome)
+                with get_conn() as conn:
+                    conn.execute("UPDATE players SET cultivation = ?, lifespan = ?, last_active = ? WHERE discord_id = ?",
+                                 (new_cultivation, new_lifespan, now, uid))
+                    conn.commit()
+                current = self._get_player(uid)
+                if current["lifespan"] <= 0:
+                    with get_conn() as conn:
+                        conn.execute("UPDATE players SET is_dead = 1 WHERE discord_id = ?", (uid,))
+                        conn.commit()
+                    chain.append(f"突破失败，{fail_msg}寿元耗尽，魂归天道。")
+                else:
+                    needed = cultivation_needed(current["realm"])
+                    chain.append(f"突破失败，{fail_msg}修为：{new_cultivation}/{needed}　寿元：{new_lifespan}年")
+                break
+
+        if len(chain) == 1:
+            prefix = "🎉 突破成功！\n" if "➜" in chain[0] else ""
+            return prefix + chain[0]
+        successes = [c for c in chain if "➜" in c]
+        fail_line = next((c for c in chain if "➜" not in c), "")
+        msg = f"🎉 **{player['name']}** 连续突破 {len(successes)} 次！\n" + "\n".join(successes)
+        if fail_line:
+            msg += f"\n\n{fail_line}"
+        return msg
 
     async def send_stop(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
@@ -344,51 +362,8 @@ class CultivationCog(commands.Cog, name="Cultivation"):
                 ).fetchall()
             city_players = [dict(r) for r in rows]
 
-        dual_section = (
-            "\n\n**双修系统**\n"
-            "· 使用 `cat!双修 @对方` 邀请他人进行双修\n"
-            "· 双方皆为清白之身时修为暴涨（10-20倍），一方清白5倍，否则1.2倍\n"
-            "· 双修冷却 2 游戏年，闭关中无法双修"
-        ) if has_dual else ""
 
-        embed = discord.Embed(
-            title="✦ 修仙长生路 ✦",
-            description=(
-                "天地初开，灵气充盈，万物皆可修仙。\n"
-                "踏入此道，以寿元换修为，历经炼气、筑基、结丹……直至飞升成仙。\n\n"
-                "**基本规则**\n"
-                "· 现实 2 小时 = 游戏 1 年，寿元随时间流逝\n"
-                "· 修炼消耗寿元，换取修为积累\n"
-                "· 修为积满可尝试突破，失败有代价\n"
-                "· 寿元归零，角色坐化，需重新创建\n"
-                "· 超过 2 年未行动，自动进入修炼状态\n\n"
-                "**探险系统**\n"
-                "· `cat!探险` 随机触发事件，每 5 游戏年可探险 8 次\n"
-                "· 12% 概率触发稀有事件，奖励丰厚\n"
-                "· 所在城市与地区影响事件池，加入宗门后有专属事件\n\n"
-                "**移动与世界**\n"
-                "· 天下共 30 座城市，分布于东域、南域、西域、北域、中州\n"
-                "· 点击「移动」按钮或使用 `cat!移动 [城市名]` 前往目的地\n"
-                "· 闭关期间无法移动\n\n"
-                "**居所与洞府**\n"
-                "· 声望 ≥ 300 可使用 `cat!买房` 在当前城市置业，提升修炼速度与探险次数\n"
-                "· 声望 ≥ 600 可使用 `cat!开辟洞府 [秘地名]` 开辟野外洞府，加成更强且全局生效\n"
-                "· 使用 `cat!我的居所` 查看已有居所与加成详情\n\n"
-                "**宗门系统**\n"
-                "· 满足条件后可加入宗门，获得专属事件与功法加成\n"
-                "· 使用 `cat!宗门列表` 查看天下宗门，`cat!加入宗门 [名]` 加入\n"
-                "· 加入后自动获得全部3本功法，`cat!门派功法` 可补领遗漏\n\n"
-                "**功法系统**\n"
-                "· 最多装备5本功法，装备后获得属性加成\n"
-                "· `cat!我的功法` 查看功法　`cat!装备功法 [名]` 装备/卸下\n"
-                "· `cat!修炼功法 [名]` 消耗灵石与寿元提升功法阶段（入门→破限）\n"
-                "· `cat!功法属性` 查看当前装备功法的总属性加成"
-                + dual_section
-            ),
-            color=discord.Color.teal(),
-        )
-        embed.set_footer(text="天道有常，长生路远，望道友珍重。")
-        await ctx.send(embed=embed, view=MainMenuView(ctx.author, has_player, can_bt, self, player, city_players))
+        await ctx.send(embed=_build_menu_embed(has_dual), view=MainMenuView(ctx.author, has_player, can_bt, self, player, city_players))
 
     @commands.command(name="查看")
     async def view(self, ctx):
@@ -565,55 +540,8 @@ class CultivationCog(commands.Cog, name="Cultivation"):
                 f"{ctx.author.mention} 修为尚未圆满，还差 **{needed - player['cultivation']}** 点。"
             )
 
-        nxt = next_realm(player["realm"])
-        if not nxt:
-            return await ctx.send(f"{ctx.author.mention} 道友已至大道巅峰，天地间再无更高境界。")
-
-        success, outcome = roll_breakthrough(
-            player["realm"], player["physique"], player["bone"], player["cultivation"]
-        )
-
-        if success:
-            new_lifespan_max = lifespan_max_for_realm(nxt)
-            lifespan_gain = max(0, new_lifespan_max - player["lifespan_max"])
-            new_lifespan = min(player["lifespan"] + lifespan_gain, new_lifespan_max)
-
-            with get_conn() as conn:
-                conn.execute("""
-                    UPDATE players SET
-                        realm = ?, cultivation = 0,
-                        lifespan = ?, lifespan_max = ?,
-                        last_active = ?
-                    WHERE discord_id = ?
-                """, (nxt, new_lifespan, new_lifespan_max, now, uid))
-                conn.commit()
-
-            await ctx.send(
-                f"🎉 {ctx.author.mention} **{player['name']}** 突破成功！\n"
-                f"**{player['realm']}** ➜ **{nxt}**\n"
-                f"寿元上限提升至 {new_lifespan_max} 年，当前寿元 {new_lifespan} 年。"
-            )
-        else:
-            new_cultivation, new_lifespan, fail_msg = apply_failure(
-                player["cultivation"], player["lifespan"], outcome
-            )
-            with get_conn() as conn:
-                conn.execute("""
-                    UPDATE players SET
-                        cultivation = ?, lifespan = ?, last_active = ?
-                    WHERE discord_id = ?
-                """, (new_cultivation, new_lifespan, now, uid))
-                conn.commit()
-
-            player = self._get_player(uid)
-            if await self._check_dead(ctx, player):
-                return
-
-            needed = cultivation_needed(player["realm"])
-            await ctx.send(
-                f"{ctx.author.mention} **{player['name']}** 突破失败。{fail_msg}\n"
-                f"修为：{new_cultivation}/{needed}　寿元剩余：{new_lifespan} 年"
-            )
+        result = await self._do_breakthrough_chain(uid, player, now)
+        await ctx.send(f"{ctx.author.mention} {result}")
 
     @commands.command(name="双修")
     async def dual_cultivate(self, ctx, target: discord.Member = None):
@@ -772,15 +700,35 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         inv_needed = cultivation_needed(inv_p["realm"])
         tgt_needed = cultivation_needed(tgt_p["realm"])
 
-        virgin_note = ""
         if both_virgin:
-            virgin_note = "\n双方清白之身已破，此后双修倍率将降低。"
+            flavor = (
+                "灵气缠绵，呼吸交织，两道身影在朦胧的灵雾中渐渐靠近……\n"
+                "初尝禁果，羞意难掩，却又欲罢不能。\n"
+                "阴阳之力在体内激荡翻涌，如决堤之水，修为暴涨。\n\n"
+                f"💮 **{inviter.display_name}** 失去了处男状态\n"
+                f"💮 **{target.display_name}** 失去了处女状态\n\n"
+                f"修为暴涨（**{multiplier:.1f}倍**）"
+            )
         elif inv_virgin or tgt_virgin:
-            virgin_note = "\n清白之身已破，此后双修倍率将降低。"
+            virgin_one = inviter.display_name if inv_virgin else target.display_name
+            gender_word = "处男" if (inv_virgin and inv_p["gender"] == "男") or (tgt_virgin and tgt_p["gender"] == "男") else "处女"
+            flavor = (
+                "灵气流转，肌肤相触，一股陌生而炽热的感觉涌遍全身……\n"
+                "懵懂与悸动交织，那道防线悄然崩塌。\n"
+                "阴阳之力借此契机奔涌而出，修为大幅提升。\n\n"
+                f"💮 **{virgin_one}** 失去了{gender_word}状态\n\n"
+                "修为大增（**5倍**）"
+            )
+        else:
+            flavor = (
+                "两道灵识相互感应，阴阳之气缓缓流转交融。\n"
+                "虽无初次的惊涛骇浪，却也有一番绵绵细水的滋味。\n\n"
+                "修为略有提升（**1.2倍**）"
+            )
 
         embed = discord.Embed(
-            title="✦ 双修开始 ✦",
-            description=f"阴阳交融，天地共鸣，双修持续 **1 游戏年**（现实 2 小时）。{virgin_note}",
+            title="✦ 双修 ✦",
+            description=f"{flavor}\n\n双修持续 **1 游戏年**（现实 2 小时）。",
             color=discord.Color.pink(),
         )
         embed.add_field(
@@ -1036,11 +984,10 @@ class CultivationCog(commands.Cog, name="Cultivation"):
 
     @tasks.loop(minutes=1)
     async def _cultivation_notifier(self):
-        """Every minute, check for players whose cultivation just finished and DM them."""
         now = time.time()
         with get_conn() as conn:
             rows = conn.execute(
-                "SELECT discord_id, name FROM players WHERE cultivating_until IS NOT NULL AND cultivating_until <= ? AND is_dead = 0",
+                "SELECT discord_id, name, cultivation, realm FROM players WHERE cultivating_until IS NOT NULL AND cultivating_until <= ? AND is_dead = 0",
                 (now,)
             ).fetchall()
         for row in rows:
@@ -1048,16 +995,29 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             if uid in self._notified:
                 continue
             self._notified.add(uid)
+            with get_conn() as conn:
+                conn.execute(
+                    "UPDATE players SET cultivating_until = NULL, cultivating_years = NULL WHERE discord_id = ?",
+                    (uid,)
+                )
+                conn.commit()
             try:
-                user = await self.bot.fetch_user(int(uid))
+                player = self._get_player(uid)
+                needed = cultivation_needed(player["realm"])
+                can_bt = self._can_breakthrough(player)
                 embed = discord.Embed(
                     title="✦ 闭关结束 ✦",
-                    description=f"**{row['name']}** 的闭关已结束，请领取修炼成果！",
+                    description=f"**{row['name']}** 出关！",
                     color=discord.Color.gold(),
                 )
-                await user.send(embed=embed, view=ClaimCultivationView(self, uid))
+                embed.add_field(name="当前修为", value=f"{player['cultivation']} / {needed}", inline=True)
+                embed.add_field(name="剩余寿元", value=f"{player['lifespan']} 年", inline=True)
+                if can_bt:
+                    embed.add_field(name="提示", value="修为已圆满，可尝试突破！", inline=False)
+                user = await self.bot.fetch_user(int(uid))
+                await user.send(embed=embed)
             except Exception:
-                pass  # DM may be disabled; silently skip
+                pass
 
     @_cultivation_notifier.before_loop
     async def _before_notifier(self):

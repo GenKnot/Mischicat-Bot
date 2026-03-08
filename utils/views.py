@@ -1,6 +1,54 @@
+import random
 import discord
 from utils.world import CITIES, SPECIAL_REGIONS, cities_by_region
 from utils.sects import SECTS, check_requirements
+
+
+def _build_menu_embed(has_dual: bool = False) -> discord.Embed:
+    dual_section = (
+        "\n\n**双修系统**\n"
+        "· 使用 `cat!双修 @对方` 邀请他人进行双修\n"
+        "· 双方皆为清白之身时修为暴涨（10-20倍），一方清白5倍，否则1.2倍\n"
+        "· 双修冷却 2 游戏年，闭关中无法双修"
+    ) if has_dual else ""
+    embed = discord.Embed(
+        title="✦ 修仙长生路 ✦",
+        description=(
+            "天地初开，灵气充盈，万物皆可修仙。\n"
+            "踏入此道，以寿元换修为，历经炼气、筑基、结丹……直至飞升成仙。\n\n"
+            "**基本规则**\n"
+            "· 现实 2 小时 = 游戏 1 年，寿元随时间流逝\n"
+            "· 修炼消耗寿元，换取修为积累\n"
+            "· 修为积满可尝试突破，失败有代价\n"
+            "· 寿元归零，角色坐化，需重新创建\n"
+            "· 超过 2 年未行动，自动进入修炼状态\n\n"
+            "**探险系统**\n"
+            "· `cat!探险` 随机触发事件，每 5 游戏年可探险 8 次\n"
+            "· 12% 概率触发稀有事件，奖励丰厚\n"
+            "· 所在城市与地区影响事件池，加入宗门后有专属事件\n\n"
+            "**移动与世界**\n"
+            "· 天下共 30 座城市，分布于东域、南域、西域、北域、中州\n"
+            "· 点击「移动」按钮或使用 `cat!移动 [城市名]` 前往目的地\n"
+            "· 闭关期间无法移动\n\n"
+            "**居所与洞府**\n"
+            "· 声望 ≥ 300 可使用 `cat!买房` 在当前城市置业，提升修炼速度与探险次数\n"
+            "· 声望 ≥ 600 可使用 `cat!开辟洞府 [秘地名]` 开辟野外洞府，加成更强且全局生效\n"
+            "· 使用 `cat!我的居所` 查看已有居所与加成详情\n\n"
+            "**宗门系统**\n"
+            "· 满足条件后可加入宗门，获得专属事件与功法加成\n"
+            "· 使用 `cat!宗门列表` 查看天下宗门，`cat!加入宗门 [名]` 加入\n"
+            "· 加入后自动获得全部3本功法，`cat!门派功法` 可补领遗漏\n\n"
+            "**功法系统**\n"
+            "· 最多装备5本功法，装备后获得属性加成\n"
+            "· `cat!我的功法` 查看功法　`cat!装备功法 [名]` 装备/卸下\n"
+            "· `cat!修炼功法 [名]` 消耗灵石与寿元提升功法阶段（入门→破限）\n"
+            "· `cat!功法属性` 查看当前装备功法的总属性加成"
+            + dual_section
+        ),
+        color=discord.Color.teal(),
+    )
+    embed.set_footer(text="天道有常，长生路远，望道友珍重。")
+    return embed
 
 
 def _get_joinable_sects(player: dict) -> list[str]:
@@ -34,6 +82,7 @@ class MainMenuView(discord.ui.View):
         if can_breakthrough:
             self.add_item(MenuButton("突破", discord.ButtonStyle.danger, "breakthrough"))
         self.add_item(MenuButton("探险", discord.ButtonStyle.secondary, "explore"))
+        self.add_item(MenuButton("茶馆", discord.ButtonStyle.secondary, "tavern"))
         if city_players:
             self.add_item(MenuButton("玩家", discord.ButtonStyle.secondary, "city_players"))
         if player:
@@ -72,8 +121,12 @@ class MenuButton(discord.ui.Button):
         if self.action == "city_players":
             city_players = getattr(self.view, "_city_players", [])
             player = getattr(self.view, "_player", None)
+            if not city_players:
+                await interaction.response.send_message("此地暂无其他修士。", ephemeral=True)
+                return
             await interaction.response.send_message(
                 embed=_city_players_embed(city_players, player),
+                view=CityPlayersView(interaction.user, city_players, player),
                 ephemeral=True,
             )
             return
@@ -101,6 +154,14 @@ class MenuButton(discord.ui.Button):
                     await explore_cog.explore(ctx)
                 else:
                     await interaction.followup.send("探险系统暂时不可用。", ephemeral=True)
+            elif self.action == "tavern":
+                tavern_cog = cog.bot.cogs.get("Tavern")
+                if tavern_cog:
+                    ctx = await cog.bot.get_context(interaction.message)
+                    ctx.author = interaction.user
+                    await tavern_cog.tavern(ctx)
+                else:
+                    await interaction.followup.send("茶馆暂时不可用。", ephemeral=True)
             elif self.action.startswith("join_sect:"):
                 sect_name = self.action[len("join_sect:"):]
                 sect_cog = cog.bot.cogs.get("Sect")
@@ -694,6 +755,220 @@ class DualCultivateInviteView(discord.ui.View):
             f"**{interaction.user.display_name}** 拒绝了双修邀请。"
         )
         self.stop()
+
+
+class CityPlayersView(discord.ui.View):
+    def __init__(self, author, city_players: list, viewer: dict):
+        super().__init__(timeout=120)
+        self.author = author
+        from utils.realms import get_realm_index
+        viewer_idx = get_realm_index(viewer["realm"]) if viewer else 0
+        for p in city_players[:5]:
+            self.add_item(CityPlayerButton(p, viewer_idx))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message("这不是你的面板。", ephemeral=True)
+            return False
+        return True
+
+
+class CityPlayerButton(discord.ui.Button):
+    def __init__(self, target_player: dict, viewer_realm_idx: int):
+        super().__init__(label=target_player["name"], style=discord.ButtonStyle.secondary)
+        self.target_player = target_player
+        self.viewer_realm_idx = viewer_realm_idx
+
+    async def callback(self, interaction: discord.Interaction):
+        from utils.db import get_conn
+        from utils.realms import get_realm_index
+        uid = str(interaction.user.id)
+        with get_conn() as conn:
+            row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
+            viewer = dict(row) if row else None
+        with get_conn() as conn:
+            row = conn.execute("SELECT * FROM players WHERE discord_id = ?",
+                               (self.target_player["discord_id"],)).fetchone()
+            target = dict(row) if row else None
+        if not viewer or not target:
+            return await interaction.response.send_message("数据异常。", ephemeral=True)
+
+        viewer_idx = get_realm_index(viewer["realm"])
+        target_idx = get_realm_index(target["realm"])
+        hide_cultivation = target_idx > viewer_idx
+
+        from utils.world import SPECIAL_REGIONS
+        pvp_zone_names = {r["name"] for r in SPECIAL_REGIONS}
+        in_pvp = viewer.get("current_city", "") in pvp_zone_names
+
+        lines = [
+            f"**{target['name']}** · {target['gender']}修",
+            f"境界：{target['realm']}",
+            f"修为：{'???' if hide_cultivation else target['cultivation']}",
+            f"寿元：{target['lifespan']} 年",
+            f"宗门：{target['sect'] or '无'}",
+        ]
+        if not in_pvp:
+            lines.append("\n*此地为安全区域，无法发起攻击。*")
+        embed = discord.Embed(
+            title=f"✦ {target['name']} ✦",
+            description="\n".join(lines),
+            color=discord.Color.teal(),
+        )
+        await interaction.response.send_message(
+            embed=embed,
+            view=CombatActionView(interaction.user, viewer, target, in_pvp),
+            ephemeral=True,
+        )
+
+
+class CombatActionView(discord.ui.View):
+    def __init__(self, author, attacker: dict, defender: dict, in_pvp_zone: bool = False):
+        super().__init__(timeout=60)
+        self.author = author
+        self.attacker = attacker
+        self.defender = defender
+        if not in_pvp_zone:
+            for item in self.children:
+                item.disabled = True
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message("这不是你的面板。", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="⚔️ 发起攻击", style=discord.ButtonStyle.danger)
+    async def attack(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        from utils.db import get_conn
+        from utils.combat import roll_combat
+        uid = str(interaction.user.id)
+        def_uid = self.defender["discord_id"]
+
+        with get_conn() as conn:
+            atk_row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
+            def_row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (def_uid,)).fetchone()
+        if not atk_row or not def_row:
+            return await interaction.followup.send("数据异常。", ephemeral=True)
+        atk = dict(atk_row)
+        dfn = dict(def_row)
+
+        if atk["is_dead"] or dfn["is_dead"]:
+            return await interaction.followup.send("对方已坐化，无需动手。", ephemeral=True)
+        if atk["current_city"] != dfn["current_city"]:
+            return await interaction.followup.send("对方已离开此地。", ephemeral=True)
+
+        won, atk_power, def_power = roll_combat(atk, dfn)
+        from utils.combat import roll_escape
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+
+        result_embed = discord.Embed(
+            title="⚔️ 战斗结算",
+            description=(
+                f"**{atk['name']}** 战力：{atk_power}\n"
+                f"**{dfn['name']}** 战力：{def_power}\n\n"
+            ),
+            color=discord.Color.red() if won else discord.Color.dark_gray(),
+        )
+        if won:
+            result_embed.description += f"**{atk['name']}** 胜！"
+            await interaction.followup.send(
+                embed=result_embed,
+                view=VictoryActionView(interaction.user, atk, dfn),
+                ephemeral=True,
+            )
+        else:
+            escaped, escape_pct = roll_escape(dfn)
+            if escaped:
+                result_embed.description += (
+                    f"**{atk['name']}** 败北！\n"
+                    f"**{dfn['name']}** 趁乱逃脱（逃跑成功率 {escape_pct}%）。"
+                )
+                result_embed.color = discord.Color.dark_gray()
+                await interaction.followup.send(embed=result_embed, ephemeral=True)
+            else:
+                result_embed.description += (
+                    f"**{atk['name']}** 败北，但 **{dfn['name']}** 未能逃脱（逃跑成功率 {escape_pct}%）！"
+                )
+                result_embed.color = discord.Color.dark_red()
+                await interaction.followup.send(
+                    embed=result_embed,
+                    view=VictoryActionView(interaction.user, atk, dfn),
+                    ephemeral=True,
+                )
+
+
+class VictoryActionView(discord.ui.View):
+    def __init__(self, author, winner: dict, loser: dict):
+        super().__init__(timeout=60)
+        self.author = author
+        self.winner = winner
+        self.loser = loser
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message("这不是你的面板。", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="💰 打劫灵石", style=discord.ButtonStyle.danger)
+    async def rob(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        from utils.db import get_conn
+        def_uid = self.loser["discord_id"]
+        atk_uid = self.winner["discord_id"]
+        with get_conn() as conn:
+            row = conn.execute("SELECT spirit_stones FROM players WHERE discord_id = ?", (def_uid,)).fetchone()
+            if not row:
+                return await interaction.followup.send("对方数据异常。", ephemeral=True)
+            stones = row["spirit_stones"]
+            loot = max(1, int(stones * random.uniform(0.3, 0.6)))
+            conn.execute("UPDATE players SET spirit_stones = spirit_stones - ? WHERE discord_id = ?", (loot, def_uid))
+            conn.execute("UPDATE players SET spirit_stones = spirit_stones + ? WHERE discord_id = ?", (loot, atk_uid))
+            conn.commit()
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        await interaction.followup.send(
+            f"你从 **{self.loser['name']}** 身上搜刮了 **{loot} 灵石**。",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="💀 废去修为", style=discord.ButtonStyle.danger)
+    async def cripple(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        from utils.db import get_conn
+        def_uid = self.loser["discord_id"]
+        with get_conn() as conn:
+            conn.execute("UPDATE players SET cultivation = 0 WHERE discord_id = ?", (def_uid,))
+            conn.commit()
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        await interaction.followup.send(
+            f"你强行打散了 **{self.loser['name']}** 的修为，其修为归零。",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="☠️ 击杀", style=discord.ButtonStyle.danger)
+    async def kill(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        from utils.db import get_conn
+        import time
+        def_uid = self.loser["discord_id"]
+        with get_conn() as conn:
+            conn.execute("UPDATE players SET is_dead = 1, lifespan = 0 WHERE discord_id = ?", (def_uid,))
+            conn.commit()
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        await interaction.followup.send(
+            f"你取了 **{self.loser['name']}** 的性命。其魂归天道，尘归尘，土归土。",
+            ephemeral=True,
+        )
 
 
 def _city_players_embed(city_players: list, viewer: dict) -> discord.Embed:

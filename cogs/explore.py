@@ -128,6 +128,87 @@ def _pick_choice_result(choices, player):
     return choices[-1]
 
 
+class ExploreResultView(discord.ui.View):
+    def __init__(self, author, cog):
+        super().__init__(timeout=120)
+        self.author = author
+        self.cog = cog
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message("这不是你的探险。", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="继续探险", style=discord.ButtonStyle.success)
+    async def continue_explore(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        uid = str(interaction.user.id)
+        player = _get_player(uid)
+        if not player or player["is_dead"]:
+            return await interaction.followup.send("无法继续探险。", ephemeral=True)
+        ok, msg = _check_explore_limit(player)
+        if not ok:
+            return await interaction.followup.send(f"{msg}", ephemeral=True)
+        _increment_explore(uid, player)
+        player = _get_player(uid)
+        event = get_event_pool(dict(player))
+        embed = discord.Embed(
+            title=f"✦ {event['title']} ✦",
+            description=event["desc"],
+            color=discord.Color.gold(),
+        )
+        count = player["explore_count"]
+        limit = _get_explore_limit(player)
+        embed.set_footer(text=f"本轮探险次数：{count}/{limit}")
+        await interaction.followup.send(
+            interaction.user.mention,
+            embed=embed,
+            view=ExploreView(interaction.user, event, player, self.cog)
+        )
+
+    @discord.ui.button(label="主菜单", style=discord.ButtonStyle.primary)
+    async def main_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        cog = self.cog
+        uid = str(interaction.user.id)
+        player = _get_player(uid)
+        has_player = player is not None and not player["is_dead"]
+        from utils.realms import cultivation_needed
+        can_bt = has_player and player["cultivation"] >= cultivation_needed(player["realm"])
+        import json
+        city_players = []
+        if has_player:
+            with get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT discord_id, name, realm, cultivation FROM players "
+                    "WHERE current_city = ? AND is_dead = 0 AND discord_id != ?",
+                    (player["current_city"], uid)
+                ).fetchall()
+            city_players = [dict(r) for r in rows]
+        from utils.views import MainMenuView, _build_menu_embed
+        cult_cog = cog.bot.cogs.get("Cultivation")
+        import json
+        has_dual = has_player and any(
+            (t if isinstance(t, str) else t.get("name", "")) == "双修功法"
+            for t in json.loads(player["techniques"] or "[]")
+        ) if has_player else False
+        await interaction.followup.send(
+            interaction.user.mention,
+            embed=_build_menu_embed(has_dual),
+            view=MainMenuView(interaction.user, has_player, can_bt, cult_cog, player, city_players)
+        )
+
+    @discord.ui.button(label="帮助", style=discord.ButtonStyle.secondary)
+    async def help_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        cult_cog = self.cog.bot.cogs.get("Cultivation")
+        if cult_cog:
+            ctx = await self.cog.bot.get_context(interaction.message)
+            ctx.author = interaction.user
+            await cult_cog.help_cmd(ctx)
+
+
 class ExploreView(discord.ui.View):
     def __init__(self, author, event: dict, player, cog):
         super().__init__(timeout=120)
@@ -189,7 +270,7 @@ class ExploreChoiceButton(discord.ui.Button):
                 description=result["flavor"] or "平安无事。",
                 color=discord.Color.teal(),
             )
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(embed=embed, view=ExploreResultView(interaction.user, cog))
 
 
 class ExploreNextView(discord.ui.View):
@@ -238,7 +319,7 @@ class ExploreNextButton(discord.ui.Button):
             description=result["flavor"] or "平安无事。",
             color=discord.Color.teal(),
         )
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, view=ExploreResultView(interaction.user, self.view.cog))
 
 
 class ExploreCog(commands.Cog, name="Explore"):

@@ -25,10 +25,10 @@ for i, r in enumerate(REALMS[20:]):
     _CULTIVATION_NEEDED[r] = 400 + i * 100
 
 _LIFESPAN_MAX = {}
-for r in REALMS[:10]:
-    _LIFESPAN_MAX[r] = 100
-for r in REALMS[10:20]:
-    _LIFESPAN_MAX[r] = 200
+for i, r in enumerate(REALMS[:10]):
+    _LIFESPAN_MAX[r] = 100 + i * 5
+for i, r in enumerate(REALMS[10:20]):
+    _LIFESPAN_MAX[r] = 200 + i * 10
 _LIFESPAN_MAX.update({
     "结丹期初期": 400, "结丹期中期": 450, "结丹期后期": 500,
     "元婴期初期": 800, "元婴期中期": 900, "元婴期后期": 1000,

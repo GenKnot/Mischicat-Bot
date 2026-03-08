@@ -1,4 +1,5 @@
 from utils.realms import get_realm_index
+from utils.techniques import WORLD_TECHNIQUES
 
 TECHNIQUE_STAGES = ["入门", "熟练", "精通", "小成", "大成", "圆满", "破限"]
 
@@ -92,6 +93,9 @@ TECHNIQUES = {
     "死亡凝视":   {"type": "攻击", "grade": "玄级上品", "stat_bonus": {"soul": 3}, "effect": {"ignore_defense_chance": 0.3, "attack_scale": "soul"}},
     "不死之身":   {"type": "防御", "grade": "玄级上品", "stat_bonus": {"bone": 3, "physique": 2}, "effect": {"revive_chance": 0.3, "once_per_realm": True}},
 }
+
+
+TECHNIQUES = {**TECHNIQUES, **WORLD_TECHNIQUES}
 
 
 def get_technique_cost(name: str, current_stage: str) -> tuple[int, int]:

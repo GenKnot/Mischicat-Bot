@@ -180,6 +180,9 @@ class ExploreResultView(discord.ui.View):
             return await interaction.followup.send("道友正在闭关，无法探险。", ephemeral=True)
         if player.get("gathering_until") and now < player["gathering_until"]:
             return await interaction.followup.send("道友正在采集中，无法探险。", ephemeral=True)
+        from utils.events.public.wanbao import is_auction_locked
+        if is_auction_locked(uid):
+            return await interaction.followup.send("拍卖会进行中，在万宝楼内无法探险。", ephemeral=True)
         _increment_explore(uid, player)
         player = _get_player(uid)
         event = get_event_pool(dict(player))
@@ -387,6 +390,10 @@ class ExploreCog(commands.Cog, name="Explore"):
             import json
             q_data = json.loads(player["active_quest"])
             return await ctx.send(f"{ctx.author.mention} 道友正在执行任务「**{q_data['title']}**」，无法探险。")
+
+        from utils.events.public.wanbao import is_auction_locked
+        if is_auction_locked(uid):
+            return await ctx.send(f"{ctx.author.mention} 拍卖会进行中，在万宝楼内无法探险。")
 
         ok, msg = _check_explore_limit(player)
         if not ok:

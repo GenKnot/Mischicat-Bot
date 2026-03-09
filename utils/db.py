@@ -121,6 +121,45 @@ def _migrate(conn):
             equipped    INTEGER NOT NULL DEFAULT 0
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS wanbao_auctions (
+            auction_id   TEXT PRIMARY KEY,
+            date_str     TEXT NOT NULL,
+            status       TEXT NOT NULL DEFAULT 'pending',
+            started_at   REAL,
+            ends_at      REAL,
+            current_lot  INTEGER NOT NULL DEFAULT 0,
+            data         TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS wanbao_lots (
+            lot_id       TEXT PRIMARY KEY,
+            auction_id   TEXT NOT NULL,
+            lot_index    INTEGER NOT NULL,
+            seller_id    TEXT,
+            item_name    TEXT NOT NULL,
+            quantity     INTEGER NOT NULL DEFAULT 1,
+            item_type    TEXT NOT NULL DEFAULT 'item',
+            start_price  INTEGER NOT NULL,
+            current_bid  INTEGER NOT NULL DEFAULT 0,
+            bidder_id    TEXT,
+            status       TEXT NOT NULL DEFAULT 'pending',
+            frozen_ids   TEXT NOT NULL DEFAULT '[]',
+            eq_data      TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS wanbao_frozen (
+            discord_id   TEXT NOT NULL,
+            auction_id   TEXT NOT NULL,
+            amount       INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (discord_id, auction_id)
+        )
+    """)
+    existing_wl = {row[1] for row in conn.execute("PRAGMA table_info(wanbao_lots)")}
+    if "eq_data" not in existing_wl:
+        conn.execute("ALTER TABLE wanbao_lots ADD COLUMN eq_data TEXT")
     conn.commit()
 
 

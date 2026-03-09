@@ -203,6 +203,34 @@ class TechniquesView(discord.ui.View):
         view.select.options = options
         await interaction.response.send_message("选择要修炼的功法：", view=view, ephemeral=True)
 
+    @discord.ui.button(label="学习功法", style=discord.ButtonStyle.success, row=1)
+    async def learn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uid = str(interaction.user.id)
+        player = _get_player(uid)
+        if not player:
+            return await interaction.response.send_message("尚未创建角色。", ephemeral=True)
+
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT item_id, quantity FROM inventory WHERE discord_id = ?", (uid,)
+            ).fetchall()
+
+        books = [(r["item_id"], r["quantity"]) for r in rows if r["item_id"] in TECHNIQUES]
+        if not books:
+            return await interaction.response.send_message("背包中没有可学习的功法书。", ephemeral=True)
+
+        options = [
+            discord.SelectOption(
+                label=name,
+                description=f"{TECHNIQUES[name].get('grade','?')} · {TECHNIQUES[name].get('type','?')}　×{qty}",
+                value=name,
+            )
+            for name, qty in books
+        ]
+        view = LearnSelectView(self.author, self.cog)
+        view.select.options = options
+        await interaction.response.send_message("选择要学习的功法：", view=view, ephemeral=True)
+
     @discord.ui.button(label="功法属性", style=discord.ButtonStyle.secondary, row=0)
     async def stats(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
@@ -446,3 +474,73 @@ class TrainConfirmView(discord.ui.View):
     @discord.ui.button(label="取消", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="已取消修炼。", embed=None, view=None)
+
+
+class LearnSelectView(discord.ui.View):
+    def __init__(self, author: discord.User, cog):
+        super().__init__(timeout=60)
+        self.author = author
+        self.cog = cog
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message("这不是你的面板。", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.select(placeholder="选择功法书...", min_values=1, max_values=1)
+    async def select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        uid = str(interaction.user.id)
+        name = select.values[0]
+        player = _get_player(uid)
+        if not player:
+            return await interaction.response.send_message("角色不存在。", ephemeral=True)
+
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT quantity FROM inventory WHERE discord_id = ? AND item_id = ?",
+                (uid, name)
+            ).fetchone()
+        if not row or row["quantity"] < 1:
+            return await interaction.response.send_message("背包中已没有这本功法书。", ephemeral=True)
+
+        techniques = _parse_techniques(player["techniques"])
+        info = TECHNIQUES.get(name, {})
+
+        if any(t.get("name") == name for t in techniques):
+            await interaction.response.send_message(
+                f"已习得「**{name}**」，背包中的书可留作交易用途。",
+                ephemeral=True
+            )
+            return
+
+        equipped_count = sum(1 for t in techniques if t.get("equipped"))
+        techniques.append({
+            "name": name,
+            "grade": info.get("grade", "黄级下品"),
+            "stage": "入门",
+            "equipped": equipped_count < 5,
+        })
+
+        with get_conn() as conn:
+            conn.execute(
+                "UPDATE players SET techniques = ? WHERE discord_id = ?",
+                (json.dumps(techniques, ensure_ascii=False), uid)
+            )
+            conn.execute(
+                "UPDATE inventory SET quantity = quantity - 1 WHERE discord_id = ? AND item_id = ?",
+                (uid, name)
+            )
+            conn.execute(
+                "DELETE FROM inventory WHERE discord_id = ? AND item_id = ? AND quantity <= 0",
+                (uid, name)
+            )
+            conn.commit()
+
+        grade = info.get("grade", "?")
+        ttype = info.get("type", "?")
+        equipped_str = "已自动装备" if equipped_count < 5 else "未装备（已满5本）"
+        await interaction.response.edit_message(
+            content=f"成功学习「**{name}**」（{grade} · {ttype}）！{equipped_str}。",
+            view=None
+        )

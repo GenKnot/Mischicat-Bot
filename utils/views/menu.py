@@ -278,7 +278,11 @@ class MenuButton(discord.ui.Button):
             elif self.action == "profile":
                 await cog.send_profile(interaction)
             elif self.action == "cultivate":
-                await cog.send_cultivate(interaction)
+                from utils.events.public.wanbao import is_auction_locked
+                if is_auction_locked(str(interaction.user.id)):
+                    await interaction.followup.send("拍卖会进行中，在万宝楼内无法闭关修炼。", ephemeral=True)
+                else:
+                    await cog.send_cultivate(interaction)
             elif self.action == "breakthrough":
                 await cog.send_breakthrough(interaction)
             elif self.action == "stop":
@@ -342,7 +346,10 @@ class MenuButton(discord.ui.Button):
                         "WHERE ep.discord_id = ? AND ep.activity = 'defense' AND e.status = 'active'",
                         (uid,)
                     ).fetchone()
-                if defense_row:
+                from utils.events.public.wanbao import is_auction_locked
+                if is_auction_locked(uid):
+                    await interaction.followup.send("拍卖会进行中，在万宝楼内无法采集。", ephemeral=True)
+                elif defense_row:
                     await interaction.followup.send("守城期间无法采集，专心守城！", ephemeral=True)
                 elif player["cultivating_until"] and now < player["cultivating_until"]:
                     remaining = seconds_to_years(player["cultivating_until"] - now)

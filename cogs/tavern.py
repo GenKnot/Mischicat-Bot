@@ -328,6 +328,12 @@ class TavernCog(commands.Cog, name="Tavern"):
         if get_region(player.get("current_city", "")):
             return await ctx.send(f"{ctx.author.mention} 此处是秘地荒野，没有茶馆。请先返回城市。")
 
+        if player.get("current_city") == "万宝楼":
+            from utils.events.public.wanbao import get_active_auction
+            auction = get_active_auction()
+            if auction and auction["status"] == "active":
+                return await ctx.send(f"{ctx.author.mention} 万宝楼拍卖会进行中，茶馆暂停营业。请前往其他城市接取任务。")
+
         if player.get("active_quest"):
             q_data = json.loads(player["active_quest"])
             due = player.get("quest_due") or 0

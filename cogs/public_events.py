@@ -20,6 +20,9 @@ PUBLIC_EVENT_CHANNEL_ENV = "PUBLIC_EVENT_CHANNEL_ID"
 PREVIEW_HOURS = [20, 20, 21, 21, 22]
 PREVIEW_MINUTES = [0, 30, 0, 30, 0]
 
+WANBAO_TRIGGER_HOUR = 20
+WANBAO_PREVIEW_HOUR = 18
+
 
 def _get_announce_channel(bot) -> discord.TextChannel | None:
     channel_id = os.getenv(PUBLIC_EVENT_CHANNEL_ENV)
@@ -84,6 +87,8 @@ class PublicEventsCog(commands.Cog, name="PublicEvents"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._preview_sent: set[int] = set()
+        self._wanbao_auction_id: str | None = None
+        self._wanbao_preview_sent: set[str] = set()
         self._scheduler.start()
 
     def cog_unload(self):
@@ -124,6 +129,8 @@ class PublicEventsCog(commands.Cog, name="PublicEvents"):
         if now_mt.hour >= 23 and len(self._preview_sent) > 0:
             if today_str not in (last_date or ""):
                 self._preview_sent.clear()
+
+        await self._wanbao_scheduler(now_mt, today_str, h, m)
 
     async def _prepare_pending_event(self, today_str: str):
         from utils.world import CITIES
@@ -215,6 +222,158 @@ class PublicEventsCog(commands.Cog, name="PublicEvents"):
         if module:
             await module.on_settle(self.bot, channel, event)
         self._preview_sent.clear()
+
+    async def _wanbao_scheduler(self, now_mt, today_str: str, h: int, m: int):
+        from utils.events.public.wanbao import (
+            get_or_create_auction, get_active_auction, get_current_lot,
+            start_auction, advance_lot, settle_lot, get_lots, WANBAO_CITY
+        )
+        channel = _get_announce_channel(self.bot)
+
+        if h == WANBAO_PREVIEW_HOUR and m == 0:
+            key = f"{today_str}_preview1"
+            if key not in self._wanbao_preview_sent:
+                self._wanbao_preview_sent.add(key)
+                auction = get_or_create_auction(today_str)
+                if channel:
+                    lots = get_lots(auction["auction_id"])
+                    embed = discord.Embed(
+                        title="✦ 万宝楼大型交易会 · 预告 ✦",
+                        description=(
+                            f"两个时辰后，万宝楼将举办本期大型拍卖会。\n\n"
+                            f"本次共有 **{len(lots)}** 件拍品，包含功法、丹药与灵材。\n"
+                            f"想参与的道友请在 **北美东部时间 {WANBAO_TRIGGER_HOUR}:00** 前抵达 **万宝楼**。\n\n"
+                            f"可上架物品（每人最多2件），流拍需支付取回费。"
+                        ),
+                        color=discord.Color.gold(),
+                    )
+                    view = discord.ui.View(timeout=None)
+                    view.add_item(_WanbaoTravelButton())
+                    await channel.send(embed=embed, view=view)
+
+        if h == WANBAO_TRIGGER_HOUR - 1 and m == 30:
+            key = f"{today_str}_preview2"
+            if key not in self._wanbao_preview_sent:
+                self._wanbao_preview_sent.add(key)
+                auction = get_or_create_auction(today_str)
+                if channel:
+                    lots = get_lots(auction["auction_id"])
+                    embed = discord.Embed(
+                        title="✦ 万宝楼交易会 · 30分钟后开始 ✦",
+                        description=f"拍卖会即将开始，当前已有 **{len(lots)}** 件拍品。\n前往 **万宝楼** 参与竞拍！",
+                        color=discord.Color.gold(),
+                    )
+                    view = discord.ui.View(timeout=None)
+                    view.add_item(_WanbaoTravelButton())
+                    await channel.send(embed=embed, view=view)
+
+        if h == WANBAO_TRIGGER_HOUR and m == 0:
+            auction = get_or_create_auction(today_str)
+            if auction["status"] == "pending":
+                first_lot = start_auction(auction["auction_id"])
+                if first_lot and channel:
+                    from utils.events.public.wanbao import LOT_DURATION
+                    from utils.views.wanbao import build_lot_embed, _item_display
+                    lots = get_lots(auction["auction_id"])
+                    with get_conn() as conn:
+                        a = conn.execute("SELECT * FROM wanbao_auctions WHERE auction_id = ?", (auction["auction_id"],)).fetchone()
+                    embed = build_lot_embed(dict(first_lot), a["ends_at"], 0, len(lots))
+                    embed.title = f"🔔 万宝楼拍卖会开始！第 1/{len(lots)} 件"
+                    self._wanbao_auction_id = auction["auction_id"]
+                    await channel.send(embed=embed)
+
+        active = get_active_auction()
+        if active and active["status"] == "active":
+            now = time.time()
+            if now >= active["ends_at"]:
+                lot = get_current_lot(active["auction_id"])
+                if lot:
+                    result = settle_lot(lot)
+                    if channel:
+                        await self._announce_lot_result(channel, result, active["auction_id"])
+                    next_lot = advance_lot(active["auction_id"])
+                    if next_lot:
+                        with get_conn() as conn:
+                            a = conn.execute("SELECT * FROM wanbao_auctions WHERE auction_id = ?", (active["auction_id"],)).fetchone()
+                        lots = get_lots(active["auction_id"])
+                        from utils.views.wanbao import build_lot_embed
+                        embed = build_lot_embed(dict(next_lot), a["ends_at"], next_lot["lot_index"], len(lots))
+                        if channel:
+                            view = discord.ui.View(timeout=None)
+                            view.add_item(_WanbaoTravelButton())
+                            await channel.send(embed=embed, view=view)
+                    else:
+                        if channel:
+                            await self._announce_auction_end(channel, active["auction_id"])
+
+    async def _announce_lot_result(self, channel, result: dict, auction_id: str):
+        lot = result["lot"]
+        from utils.views.wanbao import _item_display
+        if result["winner_id"]:
+            with get_conn() as conn:
+                p = conn.execute("SELECT name FROM players WHERE discord_id = ?", (result["winner_id"],)).fetchone()
+            winner_name = p["name"] if p else f"<@{result['winner_id']}>"
+            seller = "万宝楼" if not lot["seller_id"] else f"<@{lot['seller_id']}>"
+            embed = discord.Embed(
+                title=f"✅ {_item_display(lot)} · 成交",
+                description=(
+                    f"得标者：**{winner_name}**\n"
+                    f"成交价：**{result['final_price']} 灵石**\n"
+                    f"卖家实收：**{result['seller_income']} 灵石**（扣除8%手续费）"
+                ),
+                color=discord.Color.green(),
+            )
+        else:
+            embed = discord.Embed(
+                title=f"❌ {_item_display(lot)} · 流拍",
+                description="无人出价，此拍品流拍。" + ("卖家需支付取回费。" if lot["seller_id"] else ""),
+                color=discord.Color.red(),
+            )
+        await channel.send(embed=embed)
+
+    async def _announce_auction_end(self, channel, auction_id: str):
+        from utils.events.public.wanbao import get_lots as _get_lots
+        lots = _get_lots(auction_id)
+        sold = [l for l in lots if l["status"] == "sold"]
+        unsold = [l for l in lots if l["status"] == "unsold"]
+        embed = discord.Embed(
+            title="✦ 万宝楼拍卖会圆满结束 ✦",
+            description=(
+                f"本次共拍出 **{len(sold)}** 件，流拍 **{len(unsold)}** 件。\n"
+                "感谢各位道友的参与，下次拍卖会再见！"
+            ),
+            color=discord.Color.gold(),
+        )
+        await channel.send(embed=embed)
+
+    @commands.hybrid_command(name="万宝楼", aliases=["wbl"], description="进入万宝楼拍卖界面")
+    async def wanbao(self, ctx):
+        uid = str(ctx.author.id)
+        with get_conn() as conn:
+            row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
+        if not row:
+            return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
+        player = dict(row)
+        if player["is_dead"]:
+            return await ctx.send(f"{ctx.author.mention} 道友已坐化。")
+        if player["current_city"] != "万宝楼":
+            return await ctx.send(f"{ctx.author.mention} 需前往 **万宝楼** 方可使用此功能。")
+
+        from utils.events.public.wanbao import get_active_auction, get_lots
+        from utils.views.wanbao import WanbaoMainView, build_lots_list_embed
+        auction = get_active_auction()
+        if not auction:
+            return await ctx.send(f"{ctx.author.mention} 当前没有拍卖活动，请等待今日 **北美东部时间 {WANBAO_TRIGGER_HOUR}:00** 的拍卖会。")
+
+        lots = get_lots(auction["auction_id"])
+        status_text = {"pending": "等待开始", "active": "进行中", "ended": "已结束"}.get(auction["status"], "未知")
+        embed = discord.Embed(
+            title="✦ 万宝楼拍卖会 ✦",
+            description=f"状态：**{status_text}**　拍品：**{len(lots)}** 件",
+            color=discord.Color.gold(),
+        )
+        view = WanbaoMainView(ctx.author, self)
+        await ctx.send(ctx.author.mention, embed=embed, view=view)
 
     @commands.hybrid_command(name="公共事件", aliases=["ggsj"], description="查看当前或即将发生的世界公共事件")
     async def show_active_event(self, ctx):
@@ -593,6 +752,32 @@ class _BackToOverviewView(discord.ui.View):
             return
         await interaction.response.defer()
         await _send_main_menu(interaction, cog)
+
+
+class _WanbaoTravelButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="前往万宝楼", style=discord.ButtonStyle.success)
+
+    async def callback(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        with get_conn() as conn:
+            row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
+        if not row:
+            return await interaction.response.send_message("尚未创建角色。", ephemeral=True)
+        player = dict(row)
+        if player["current_city"] == "万宝楼":
+            return await interaction.response.send_message("你已在万宝楼。", ephemeral=True)
+        now = time.time()
+        if player.get("cultivating_until") and now < player["cultivating_until"]:
+            return await interaction.response.send_message("正在闭关中，无法移动。", ephemeral=True)
+        if player.get("gathering_until") and now < player["gathering_until"]:
+            return await interaction.response.send_message("正在采集中，无法移动。", ephemeral=True)
+        if player.get("active_quest"):
+            return await interaction.response.send_message("正在执行任务，无法移动。", ephemeral=True)
+        with get_conn() as conn:
+            conn.execute("UPDATE players SET current_city = ?, last_active = ? WHERE discord_id = ?", ("万宝楼", now, uid))
+            conn.commit()
+        await interaction.response.send_message("已传送至 **万宝楼**，拍卖会即将开始！", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

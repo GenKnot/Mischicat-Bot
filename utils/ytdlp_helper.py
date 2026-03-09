@@ -11,7 +11,7 @@ FFMPEG_OPTIONS = {
 }
 
 BASE_OPTIONS = {
-    "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+    "format": "bestaudio[acodec^=opus]/bestaudio[abr>=192]/bestaudio[abr>=160]/bestaudio/best",
     "outtmpl": "downloads/%(extractor)s-%(id)s-%(title)s.%(ext)s",
     "restrictfilenames": True,
     "noplaylist": True,

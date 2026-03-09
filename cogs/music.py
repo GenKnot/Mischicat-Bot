@@ -43,7 +43,7 @@ class MusicCog(commands.Cog, name="Music"):
         self.current = None
         self._play_next(ctx)
 
-    @commands.command(name="join")
+    @commands.hybrid_command(name="join", description="让音乐机器人加入你所在的语音频道")
     async def join(self, ctx):
         if not ctx.author.voice:
             return await ctx.send("you're not in a voice channel")
@@ -54,7 +54,7 @@ class MusicCog(commands.Cog, name="Music"):
             await channel.connect()
         await ctx.send(f"joined **{channel.name}**")
 
-    @commands.command(name="leave")
+    @commands.hybrid_command(name="leave", description="让音乐机器人离开当前语音频道并清空队列")
     async def leave(self, ctx):
         if not self._is_connected(ctx):
             return await ctx.send("i'm not in a voice channel")
@@ -63,7 +63,7 @@ class MusicCog(commands.Cog, name="Music"):
         await ctx.voice_client.disconnect()
         await ctx.send("disconnected")
 
-    @commands.command(name="play", aliases=["p"])
+    @commands.hybrid_command(name="play", aliases=["p"], description="播放或队列一首来自链接或关键词的歌曲")
     async def play(self, ctx, *, query: str):
         if not await self._ensure_voice(ctx):
             return
@@ -103,7 +103,7 @@ class MusicCog(commands.Cog, name="Music"):
         if not ctx.voice_client.is_playing() and not ctx.voice_client.is_paused():
             self._play_next(ctx)
 
-    @commands.command(name="pause")
+    @commands.hybrid_command(name="pause", description="暂停当前播放的音乐")
     async def pause(self, ctx):
         if ctx.voice_client and ctx.voice_client.is_playing():
             ctx.voice_client.pause()
@@ -111,7 +111,7 @@ class MusicCog(commands.Cog, name="Music"):
         else:
             await ctx.send("nothing is playing")
 
-    @commands.command(name="resume")
+    @commands.hybrid_command(name="resume", description="继续播放已暂停的音乐")
     async def resume(self, ctx):
         if ctx.voice_client and ctx.voice_client.is_paused():
             ctx.voice_client.resume()
@@ -119,7 +119,7 @@ class MusicCog(commands.Cog, name="Music"):
         else:
             await ctx.send("nothing is paused")
 
-    @commands.command(name="stop")
+    @commands.hybrid_command(name="stop", description="停止播放并清空当前播放队列")
     async def stop(self, ctx):
         self.queue.clear()
         self.current = None
@@ -127,7 +127,7 @@ class MusicCog(commands.Cog, name="Music"):
             ctx.voice_client.stop()
         await ctx.send("stopped and cleared the queue")
 
-    @commands.command(name="skip")
+    @commands.hybrid_command(name="skip", description="跳过当前正在播放的歌曲")
     async def skip(self, ctx):
         if ctx.voice_client and ctx.voice_client.is_playing():
             ctx.voice_client.stop()
@@ -135,7 +135,7 @@ class MusicCog(commands.Cog, name="Music"):
         else:
             await ctx.send("nothing is playing")
 
-    @commands.command(name="queue")
+    @commands.hybrid_command(name="queue", description="查看当前歌曲与接下来队列")
     async def queue_cmd(self, ctx):
         if not self.current and not self.queue:
             return await ctx.send("queue is empty")

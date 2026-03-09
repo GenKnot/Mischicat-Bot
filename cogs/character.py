@@ -30,7 +30,7 @@ class CharacterCog(commands.Cog, name="Character"):
             "soul":          max(0, int((player.get("soul", 5) - 5) * 0.3 * mult)),
         }
 
-    @commands.command(name="创建角色")
+    @commands.hybrid_command(name="创建角色", description="创建新的修仙角色，开辟修行之路")
     async def create_character(self, ctx):
         uid = str(ctx.author.id)
         existing = get_player(uid)
@@ -151,13 +151,13 @@ class CharacterCog(commands.Cog, name="Character"):
         finally:
             self._creating.discard(uid)
 
-    @commands.command(name="解散队伍")
+    @commands.hybrid_command(name="解散队伍", description="解散当前所在队伍")
     async def disband_party(self, ctx):
         from utils.views.party import disband_party
         msg = await disband_party(str(ctx.author.id), self.bot)
         await ctx.send(f"{ctx.author.mention} {msg}")
 
-    @commands.command(name="help")
+    @commands.hybrid_command(name="help", description="查看修仙系统主菜单与可用指令")
     async def help_cmd(self, ctx):
         import json
         uid = str(ctx.author.id)

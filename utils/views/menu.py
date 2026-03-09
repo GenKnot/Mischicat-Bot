@@ -200,10 +200,7 @@ class MainMenuView(discord.ui.View):
                 self.add_item(MenuButton(f"加入{sect_name}", discord.ButtonStyle.success, f"join_sect:{sect_name}"))
         self.add_item(MenuButton("公共事件", discord.ButtonStyle.secondary, "public_event"))
         if player and player.get("current_city") == "万宝楼":
-            from utils.events.public.wanbao import get_active_auction
-            auction = get_active_auction()
-            if auction:
-                self.add_item(MenuButton("万宝楼", discord.ButtonStyle.primary, "wanbao"))
+            self.add_item(MenuButton("万宝楼", discord.ButtonStyle.primary, "wanbao"))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user != self.author:

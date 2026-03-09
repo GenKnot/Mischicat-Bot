@@ -380,7 +380,7 @@ class PublicEventsCog(commands.Cog, name="PublicEvents"):
 
     @commands.hybrid_command(name="公共事件", aliases=["ggsj"], description="查看当前或即将发生的世界公共事件")
     async def show_active_event(self, ctx):
-        from utils.events.public.wanbao import get_active_auction, get_lots, WANBAO_TRIGGER_HOUR
+        from utils.events.public.wanbao import get_active_auction, get_lots
         active = _get_active_event()
         pending = _get_pending_event() if not active else None
         auction = get_active_auction()

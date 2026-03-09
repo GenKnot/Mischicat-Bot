@@ -44,10 +44,13 @@ async def _send_main_menu(interaction: discord.Interaction, cog):
                 (player["current_city"], uid)
             ).fetchall()
         city_players = [dict(r) for r in rows]
-    await interaction.followup.send(
-        embed=_build_menu_embed(has_dual),
-        view=MainMenuView(interaction.user, has_player, can_bt, cog, player, city_players)
-    )
+    embed = _build_menu_embed(has_dual)
+    view = MainMenuView(interaction.user, has_player, can_bt, cog, player, city_players)
+    # Prefer editing the current message to avoid spam.
+    if interaction.response.is_done():
+        await interaction.message.edit(embed=embed, view=view)
+    else:
+        await interaction.response.edit_message(embed=embed, view=view)
 
 
 class WorldMenuView(discord.ui.View):
@@ -65,7 +68,7 @@ class WorldMenuView(discord.ui.View):
     @discord.ui.button(label="城市", style=discord.ButtonStyle.primary)
     async def cities_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         from utils.views.travel import CityRegionView
-        await interaction.response.send_message(
+        await interaction.response.edit_message(
             embed=discord.Embed(title="✦ 天下城市 ✦", description="共三十座城市，分布于五大区域，请选择区域查看详情：", color=discord.Color.blue()),
             view=CityRegionView(interaction.user, self.cog),
         )
@@ -76,7 +79,7 @@ class WorldMenuView(discord.ui.View):
         for r in SPECIAL_REGIONS:
             req = f"（需 {r['min_realm']} 以上）" if r["min_realm"] != "炼气期1层" else ""
             embed.add_field(name=f"{r['name']}  [{r['type']}]{req}", value=r["desc"], inline=False)
-        await interaction.response.send_message(embed=embed, view=_BackToWorldView(interaction.user, self.cog))
+        await interaction.response.edit_message(embed=embed, view=_BackToWorldView(interaction.user, self.cog))
 
     @discord.ui.button(label="宗门", style=discord.ButtonStyle.secondary)
     async def sects_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -86,7 +89,7 @@ class WorldMenuView(discord.ui.View):
             description="天下宗门分正道与邪道两派，各有传承。\n另有隐世宗门数个，行踪不定，有缘自会相遇。\n\n请选择阵营查看详情：",
             color=discord.Color.teal(),
         )
-        await interaction.response.send_message(embed=embed, view=SectAlignmentView(interaction.user, self.cog))
+        await interaction.response.edit_message(embed=embed, view=SectAlignmentView(interaction.user, self.cog))
 
     @discord.ui.button(label="返回主菜单", style=discord.ButtonStyle.secondary, row=1)
     async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -111,7 +114,7 @@ class _BackToWorldView(discord.ui.View):
 
     @discord.ui.button(label="返回世界", style=discord.ButtonStyle.secondary)
     async def back_world(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(embed=_world_overview_embed(), view=WorldMenuView(interaction.user, self.cog))
+        await interaction.response.edit_message(embed=_world_overview_embed(), view=WorldMenuView(interaction.user, self.cog))
 
     @discord.ui.button(label="返回主菜单", style=discord.ButtonStyle.secondary)
     async def back_menu(self, interaction: discord.Interaction, button: discord.ui.Button):

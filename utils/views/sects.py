@@ -45,11 +45,11 @@ class SectAlignmentView(discord.ui.View):
 
     @discord.ui.button(label="正道宗门", style=discord.ButtonStyle.primary)
     async def righteous(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(embed=_sects_embed("正道"))
+        await interaction.response.edit_message(embed=_sects_embed("正道"), view=self)
 
     @discord.ui.button(label="邪道宗门", style=discord.ButtonStyle.danger)
     async def evil(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(embed=_sects_embed("邪道"))
+        await interaction.response.edit_message(embed=_sects_embed("邪道"), view=self)
 
     @discord.ui.button(label="隐世宗门", style=discord.ButtonStyle.secondary)
     async def hidden(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -65,12 +65,12 @@ class SectAlignmentView(discord.ui.View):
             ),
             color=discord.Color.dark_purple(),
         )
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="返回世界", style=discord.ButtonStyle.secondary, row=1)
     async def back_world(self, interaction: discord.Interaction, button: discord.ui.Button):
         from utils.views.world import WorldMenuView, _world_overview_embed
-        await interaction.response.send_message(embed=_world_overview_embed(), view=WorldMenuView(interaction.user, self.cog))
+        await interaction.response.edit_message(embed=_world_overview_embed(), view=WorldMenuView(interaction.user, self.cog))
 
     @discord.ui.button(label="返回主菜单", style=discord.ButtonStyle.secondary, row=1)
     async def back_menu(self, interaction: discord.Interaction, button: discord.ui.Button):

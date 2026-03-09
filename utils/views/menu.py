@@ -220,11 +220,11 @@ class MenuButton(discord.ui.Button):
         cog = self.view.cog
 
         if self.action == "world":
-            await interaction.response.send_message(embed=_world_overview_embed(), view=WorldMenuView(interaction.user, cog))
+            await interaction.response.edit_message(embed=_world_overview_embed(), view=WorldMenuView(interaction.user, cog))
             return
 
         if self.action == "travel":
-            await interaction.response.send_message(
+            await interaction.response.edit_message(
                 embed=discord.Embed(title="✦ 移动 · 选择地区 ✦", description="请选择目标地区：", color=discord.Color.teal()),
                 view=TravelRegionView(interaction.user, cog),
             )

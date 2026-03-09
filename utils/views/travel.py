@@ -42,14 +42,14 @@ class TravelRegionButton(discord.ui.Button):
                 embed.add_field(name=f"{r['name']}  {tag}", value=r["desc"], inline=False)
 
             view = TravelSecretView(self.view.author, self.view.cog, player_idx)
-            await interaction.response.send_message(embed=embed, view=view)
+            await interaction.response.edit_message(embed=embed, view=view)
             return
 
         cities = cities_by_region(self.region)
         embed = discord.Embed(title=f"✦ {self.region} · 选择目的地 ✦", color=discord.Color.teal())
         for c in cities:
             embed.add_field(name=c["name"], value=c["desc"], inline=False)
-        await interaction.response.send_message(embed=embed, view=TravelCityView(self.view.author, self.view.cog, cities))
+        await interaction.response.edit_message(embed=embed, view=TravelCityView(self.view.author, self.view.cog, cities))
 
 
 class TravelCityView(discord.ui.View):
@@ -81,6 +81,7 @@ class TravelCityButton(discord.ui.Button):
         travel_cog = bot.cogs.get("Travel") or self.view.cog
         ctx = await bot.get_context(interaction.message)
         ctx.author = interaction.user
+        ctx._component_interaction = interaction
         await travel_cog.travel(ctx, city_name=self.city_name)
 
 
@@ -119,6 +120,7 @@ class TravelSecretButton(discord.ui.Button):
         travel_cog = bot.cogs.get("Travel") or self.view.cog
         ctx = await bot.get_context(interaction.message)
         ctx.author = interaction.user
+        ctx._component_interaction = interaction
         await travel_cog.travel(ctx, city_name=self.secret_name)
 
 
@@ -149,7 +151,7 @@ class CityRegionButton(discord.ui.Button):
         embed = discord.Embed(title=f"✦ {self.region} ✦", color=discord.Color.blue())
         for c in cities:
             embed.add_field(name=c["name"], value=c["desc"], inline=False)
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.edit_message(embed=embed, view=self.view)
 
 
 class _BackToWorldButton(discord.ui.Button):
@@ -158,7 +160,7 @@ class _BackToWorldButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         from utils.views.world import WorldMenuView, _world_overview_embed
-        await interaction.response.send_message(
+        await interaction.response.edit_message(
             embed=_world_overview_embed(),
             view=WorldMenuView(interaction.user, self.view.cog)
         )
@@ -176,6 +178,21 @@ class _BackToMenuButton(discord.ui.Button):
             return
         await interaction.response.defer()
         await _send_main_menu(interaction, cog)
+
+
+class TravelAfterMoveView(discord.ui.View):
+    def __init__(self, author, cog):
+        super().__init__(timeout=120)
+        self.author = author
+        self.cog = cog
+        self.add_item(_BackToTravelRegionButton())
+        self.add_item(_BackToMenuButton())
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message("这不是你的面板。", ephemeral=True)
+            return False
+        return True
 
 
 class _BackToTravelRegionButton(discord.ui.Button):

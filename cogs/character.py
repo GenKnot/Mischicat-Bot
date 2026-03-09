@@ -88,6 +88,7 @@ class CharacterCog(commands.Cog, name="Character"):
                             cultivating_until=NULL, cultivating_years=NULL,
                             is_dead=0, is_virgin=1, rebirth_count=rebirth_count,
                             sect=NULL, sect_rank=NULL, techniques='[]',
+                            dual_partner_id=NULL,
                             cultivation_overflow=0, current_city=?,
                             explore_count=0, explore_reset_year=0,
                             reputation=0, cave=NULL,

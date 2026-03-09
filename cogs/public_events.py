@@ -359,29 +359,35 @@ class ConfirmStopAndTravelView(discord.ui.View):
             return await interaction.response.send_message("这不是你的操作。", ephemeral=True)
 
         now = time.time()
-        player = self.player
         updates = {"current_city": self.city, "last_active": now}
 
         if self.is_cultivating:
-            from utils.character import seconds_to_years, calc_cultivation_gain
-            from utils.character import get_cultivation_bonus
-            elapsed_years = seconds_to_years(now - player["last_active"])
-            actual_years = min(int(elapsed_years), player.get("cultivating_years") or 0)
-            bonus = get_cultivation_bonus(str(player["discord_id"]), player["current_city"], player.get("cave"))
-            pill_active = player.get("pill_buff_until") and now < player["pill_buff_until"]
-            if pill_active:
-                bonus += 0.5
-            overflow = player.get("cultivation_overflow") or 0
-            if overflow > 0:
-                total_years = player.get("cultivating_years") or 1
-                gain = int(overflow * actual_years / max(total_years, 1))
+            cult_cog = interaction.client.cogs.get("Cultivation")
+            if cult_cog:
+                # 双修时将由 Cultivation 统一处理“停一方=停双方”
+                await cult_cog._stop_cultivation_with_pair(self.uid, now, actor_name=interaction.user.display_name)
             else:
-                gain = int(calc_cultivation_gain(actual_years, player["comprehension"], player["spirit_root_type"]) * (1 + bonus))
-            updates["cultivation"] = player["cultivation"] + gain
-            updates["lifespan"] = max(0, player["lifespan"] - actual_years)
-            updates["cultivating_until"] = None
-            updates["cultivating_years"] = None
-            updates["cultivation_overflow"] = 0
+                # fallback：仅停止自己（不含双修联动）
+                player = self.player
+                from utils.character import seconds_to_years, calc_cultivation_gain
+                from utils.character import get_cultivation_bonus
+                elapsed_years = seconds_to_years(now - player["last_active"])
+                actual_years = min(int(elapsed_years), player.get("cultivating_years") or 0)
+                bonus = get_cultivation_bonus(str(player["discord_id"]), player["current_city"], player.get("cave"))
+                pill_active = player.get("pill_buff_until") and now < player["pill_buff_until"]
+                if pill_active:
+                    bonus += 0.5
+                overflow = player.get("cultivation_overflow") or 0
+                if overflow > 0:
+                    total_years = player.get("cultivating_years") or 1
+                    gain = int(overflow * actual_years / max(total_years, 1))
+                else:
+                    gain = int(calc_cultivation_gain(actual_years, player["comprehension"], player["spirit_root_type"]) * (1 + bonus))
+                updates["cultivation"] = player["cultivation"] + gain
+                updates["lifespan"] = max(0, player["lifespan"] - actual_years)
+                updates["cultivating_until"] = None
+                updates["cultivating_years"] = None
+                updates["cultivation_overflow"] = 0
 
         if self.is_gathering:
             updates["gathering_until"] = None

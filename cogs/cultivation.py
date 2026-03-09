@@ -450,39 +450,105 @@ class CultivationCog(commands.Cog, name="Cultivation"):
 
     async def send_stop(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
+        now = time.time()
+        result = await self._stop_cultivation_with_pair(uid, now, actor_name=interaction.user.display_name)
+        if not result:
+            return await interaction.followup.send("道友当前并未在闭关。")
+        await interaction.followup.send(f"{interaction.user.mention} {result}")
+
+    async def _stop_cultivation_with_pair(self, uid: str, now: float, actor_name: str = "") -> str | None:
         player = self._get_player(uid)
         if not player:
-            return await interaction.followup.send("尚未踏入修仙之路。")
-        now = time.time()
-        if not player["cultivating_until"] or now >= player["cultivating_until"]:
-            return await interaction.followup.send("道友当前并未在闭关。")
-        elapsed_years = seconds_to_years(now - player["last_active"])
-        actual_years = min(int(elapsed_years), player["cultivating_years"])
-        overflow = player.get("cultivation_overflow") or 0
-        if overflow > 0:
-            total_years = player.get("cultivating_years") or 1
-            gain = int(overflow * actual_years / max(total_years, 1))
-        else:
-            bonus = get_cultivation_bonus(uid, player["current_city"], player.get("cave"))
-            pill_active = player.get("pill_buff_until") and now < player["pill_buff_until"]
-            if pill_active:
-                bonus += 0.5
-            gain = int(calc_cultivation_gain(actual_years, player["comprehension"], player["spirit_root_type"]) * (1 + bonus))
-        new_cultivation = player["cultivation"] + gain
-        new_lifespan = player["lifespan"] - actual_years
+            return None
+        if not player.get("cultivating_until") or now >= player["cultivating_until"]:
+            return None
+
+        def _calc_stop(p: dict, is_dual: bool) -> tuple[int, int, int, int]:
+            elapsed_years = seconds_to_years(now - (p.get("last_active") or now))
+            total_years = p.get("cultivating_years") or 0
+            actual_years = min(int(elapsed_years), int(total_years or 0))
+            overflow = p.get("cultivation_overflow") or 0
+            if overflow > 0:
+                gain = int(overflow * actual_years / max(int(total_years or 1), 1))
+            else:
+                bonus = get_cultivation_bonus(str(p["discord_id"]), p["current_city"], p.get("cave"))
+                pill_active = p.get("pill_buff_until") and now < p["pill_buff_until"]
+                if pill_active:
+                    bonus += 0.5
+                gain = int(calc_cultivation_gain(actual_years, p["comprehension"], p["spirit_root_type"]) * (1 + bonus))
+            new_cultivation = (p.get("cultivation") or 0) + gain
+            if is_dual:
+                new_lifespan = (p.get("lifespan") or 0) + (int(total_years or 0) - actual_years)
+                new_lifespan = min(new_lifespan, int(p.get("lifespan_max") or new_lifespan))
+            else:
+                new_lifespan = (p.get("lifespan") or 0) - actual_years
+            return actual_years, gain, new_cultivation, new_lifespan
+
+        partner_id = (player.get("dual_partner_id") or "").strip()
+        is_dual = bool(partner_id)
+        partner = self._get_player(partner_id) if is_dual else None
+        partner_active = bool(
+            partner
+            and partner.get("cultivating_until")
+            and now < partner["cultivating_until"]
+            and str(partner.get("dual_partner_id") or "") == uid
+        )
+
+        # Solo stop
+        if not is_dual or not partner_active:
+            actual_years, gain, new_cultivation, new_lifespan = _calc_stop(player, is_dual=False)
+            with get_conn() as conn:
+                conn.execute("""
+                    UPDATE players SET cultivation = ?, lifespan = ?,
+                        cultivation_overflow = 0,
+                        cultivating_until = NULL, cultivating_years = NULL,
+                        dual_partner_id = NULL,
+                        last_active = ?
+                    WHERE discord_id = ?
+                """, (new_cultivation, new_lifespan, now, uid))
+                conn.commit()
+            needed = cultivation_needed(player["realm"])
+            return (
+                f"**{player['name']}** 退出闭关。\n"
+                f"实际修炼 **{actual_years} 年**，获得修为 **+{gain}**。\n"
+                f"修为进度：{new_cultivation}/{needed}　寿元剩余：{new_lifespan} 年"
+            )
+
+        # Dual stop: stop both sides together
+        a_years, a_gain, a_cult, a_life = _calc_stop(player, is_dual=True)
+        b_years, b_gain, b_cult, b_life = _calc_stop(partner, is_dual=True)
         with get_conn() as conn:
-            conn.execute("""
-                UPDATE players SET cultivation = ?, lifespan = ?,
-                    cultivation_overflow = 0,
-                    cultivating_until = NULL, cultivating_years = NULL, last_active = ?
-                WHERE discord_id = ?
-            """, (new_cultivation, new_lifespan, now, uid))
+            for puid, nc, nl in [(uid, a_cult, a_life), (partner_id, b_cult, b_life)]:
+                conn.execute("""
+                    UPDATE players SET cultivation = ?, lifespan = ?,
+                        cultivation_overflow = 0,
+                        cultivating_until = NULL, cultivating_years = NULL,
+                        dual_partner_id = NULL,
+                        last_active = ?
+                    WHERE discord_id = ?
+                """, (nc, nl, now, puid))
             conn.commit()
-        needed = cultivation_needed(player["realm"])
-        await interaction.followup.send(
-            f"{interaction.user.mention} **{player['name']}** 退出闭关。\n"
-            f"实际修炼 **{actual_years} 年**，获得修为 **+{gain}**。\n"
-            f"修为进度：{new_cultivation}/{needed}　寿元剩余：{new_lifespan} 年"
+
+        # Best-effort notify partner via DM
+        try:
+            user = await self.bot.fetch_user(int(partner_id))
+            needed_b = cultivation_needed(partner["realm"])
+            msg = (
+                f"✦ 双修中止 ✦\n"
+                f"因对方提前停止，你也已出关。\n"
+                f"实际修炼 **{b_years} 年**，获得修为 **+{b_gain}**。\n"
+                f"修为进度：{b_cult}/{needed_b}　寿元剩余：{b_life} 年"
+            )
+            await user.send(msg)
+        except Exception:
+            pass
+
+        needed_a = cultivation_needed(player["realm"])
+        return (
+            f"✦ 双修中止 ✦\n"
+            f"你停止了双修，**双方已同时出关**。\n\n"
+            f"你（**{player['name']}**）：实际修炼 **{a_years} 年**，修为 **+{a_gain}**，进度 {a_cult}/{needed_a}，寿元 {a_life} 年\n"
+            f"对方（**{partner['name']}**）：实际修炼 **{b_years} 年**，修为 **+{b_gain}**，寿元 {b_life} 年"
         )
 
     @commands.hybrid_command(name="c", aliases=["h"], description="主菜单/创建角色：有角色则打开主菜单，无角色则进入创建流程")
@@ -627,34 +693,10 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         now = time.time()
         if not player["cultivating_until"] or now >= player["cultivating_until"]:
             return await ctx.send(f"{ctx.author.mention} 道友当前并未在闭关。")
-        elapsed_years = seconds_to_years(now - player["last_active"])
-        actual_years = min(int(elapsed_years), player["cultivating_years"])
-        overflow = player.get("cultivation_overflow") or 0
-        if overflow > 0:
-            total_years = player.get("cultivating_years") or 1
-            gain = int(overflow * actual_years / max(total_years, 1))
-        else:
-            bonus = get_cultivation_bonus(uid, player["current_city"], player.get("cave"))
-            pill_active = player.get("pill_buff_until") and now < player["pill_buff_until"]
-            if pill_active:
-                bonus += 0.5
-            gain = int(calc_cultivation_gain(actual_years, player["comprehension"], player["spirit_root_type"]) * (1 + bonus))
-        new_cultivation = player["cultivation"] + gain
-        new_lifespan = player["lifespan"] - actual_years
-        with get_conn() as conn:
-            conn.execute("""
-                UPDATE players SET cultivation = ?, lifespan = ?,
-                    cultivation_overflow = 0,
-                    cultivating_until = NULL, cultivating_years = NULL, last_active = ?
-                WHERE discord_id = ?
-            """, (new_cultivation, new_lifespan, now, uid))
-            conn.commit()
-        needed = cultivation_needed(player["realm"])
-        await ctx.send(
-            f"{ctx.author.mention} **{player['name']}** 退出闭关。\n"
-            f"实际修炼 **{actual_years} 年**，获得修为 **+{gain}**。\n"
-            f"修为进度：{new_cultivation}/{needed}　寿元剩余：{new_lifespan} 年"
-        )
+        result = await self._stop_cultivation_with_pair(uid, now, actor_name=ctx.author.display_name)
+        if not result:
+            return await ctx.send(f"{ctx.author.mention} 道友当前并未在闭关。")
+        await ctx.send(f"{ctx.author.mention} {result}")
 
     @commands.hybrid_command(name="突破", aliases=["tp"], description="尝试突破当前境界，成功可提升大境界与寿元")
     async def breakthrough(self, ctx):
@@ -808,13 +850,14 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         tgt_gain = _calc(tgt_p)
         with get_conn() as conn:
             for p, gain, uid in [(inv_p, inv_gain, inv_uid), (tgt_p, tgt_gain, tgt_uid)]:
+                partner_id = tgt_uid if uid == inv_uid else inv_uid
                 new_life = p["lifespan"] - years
                 conn.execute("""
                     UPDATE players SET lifespan = ?, cultivation_overflow = ?,
                         cultivating_until = ?, cultivating_years = ?,
-                        last_dual_cultivate = ?, is_virgin = 0, last_active = ?
+                        last_dual_cultivate = ?, dual_partner_id = ?, is_virgin = 0, last_active = ?
                     WHERE discord_id = ?
-                """, (new_life, gain, cultivating_until, years, now, now, uid))
+                """, (new_life, gain, cultivating_until, years, now, partner_id, now, uid))
             conn.commit()
 
         inv_needed = cultivation_needed(inv_p["realm"])
@@ -880,7 +923,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             new_cultivation = row["cultivation"] + gain
             with get_conn() as conn:
                 conn.execute(
-                    "UPDATE players SET cultivation = ?, cultivation_overflow = 0, cultivating_until = NULL, cultivating_years = NULL WHERE discord_id = ?",
+                    "UPDATE players SET cultivation = ?, cultivation_overflow = 0, cultivating_until = NULL, cultivating_years = NULL, dual_partner_id = NULL WHERE discord_id = ?",
                     (new_cultivation, uid)
                 )
                 conn.commit()

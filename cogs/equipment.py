@@ -105,30 +105,32 @@ class EquipmentCog(commands.Cog, name="Equipment"):
 
         if "lifespan" in effect:
             gain = effect["lifespan"]
-            if player["lifespan"] >= player["lifespan_max"]:
+            from utils.character import get_effective_lifespan_max
+            eff_max = get_effective_lifespan_max(player)
+            if player["lifespan"] >= eff_max:
                 return await ctx.send(
-                    f"{ctx.author.mention} 当前寿元 **{player['lifespan']}年** 已达上限（{player['lifespan_max']}年），"
+                    f"{ctx.author.mention} 当前寿元 **{player['lifespan']}年** 已达上限（{eff_max}年），"
                     f"「{item_name}」无法生效。"
                 )
-            new_lifespan = min(player["lifespan"] + gain, player["lifespan_max"])
+            new_lifespan = min(player["lifespan"] + gain, eff_max)
             actual = new_lifespan - player["lifespan"]
             with get_conn() as conn:
                 conn.execute("UPDATE players SET lifespan = ? WHERE discord_id = ?", (new_lifespan, uid))
                 conn.commit()
             remove_item(uid, item_name)
-            return await ctx.send(f"{ctx.author.mention} 服用「{item_name}」，寿元恢复 **+{actual}年**（当前 {new_lifespan}/{player['lifespan_max']} 年）。")
+            return await ctx.send(f"{ctx.author.mention} 服用「{item_name}」，寿元恢复 **+{actual}年**（当前 {new_lifespan}/{eff_max} 年）。")
 
         if "lifespan_extend" in effect:
             gain = effect["lifespan_extend"]
             new_lifespan = player["lifespan"] + gain
+            from utils.character import get_effective_lifespan_max
+            eff_max = get_effective_lifespan_max(player)
             with get_conn() as conn:
                 conn.execute("UPDATE players SET lifespan = ? WHERE discord_id = ?", (new_lifespan, uid))
                 conn.commit()
             remove_item(uid, item_name)
-            over = ""
-            if new_lifespan > player["lifespan_max"]:
-                over = f"（超出上限 {new_lifespan - player['lifespan_max']} 年）"
-            return await ctx.send(f"{ctx.author.mention} 服用「{item_name}」，寿元 **+{gain}年**（当前 {new_lifespan}/{player['lifespan_max']} 年）{over}")
+            over = f"（超出基础上限 {new_lifespan - player['lifespan_max']} 年）" if new_lifespan > player["lifespan_max"] else ""
+            return await ctx.send(f"{ctx.author.mention} 服用「{item_name}」，寿元 **+{gain}年**（当前 {new_lifespan}/{eff_max} 年）{over}")
 
         if "cultivation_speed_bonus" in effect:
             import time as _t

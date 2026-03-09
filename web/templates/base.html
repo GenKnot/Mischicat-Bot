@@ -13,6 +13,7 @@
   <a href="/players" {% if request.url.path.startswith("/players") %}class="active"{% endif %}>修士</a>
   <a href="/events" {% if request.url.path == "/events" %}class="active"{% endif %}>公共事件</a>
   <a href="/items" {% if request.url.path == "/items" %}class="active"{% endif %}>物品图鉴</a>
+  <a href="/techniques" {% if request.url.path == "/techniques" %}class="active"{% endif %}>功法大全</a>
   <a href="/stats" {% if request.url.path == "/stats" %}class="active"{% endif %}>属性榜</a>
   <a href="/dead" {% if request.url.path == "/dead" %}class="active"{% endif %}>已坐化</a>
 </nav>

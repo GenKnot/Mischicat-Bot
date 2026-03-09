@@ -230,6 +230,85 @@ async def stats(request: Request, sort: str = "cultivation", order: str = "desc"
     })
 
 
+@app.get("/techniques", response_class=HTMLResponse)
+async def techniques_page(request: Request, type_filter: str = "", grade: str = "", q: str = ""):
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    from utils.sects import TECHNIQUES, STAGE_STAT_MULTIPLIER, STAGE_PCT_MULTIPLIER, PCT_STATS, TECHNIQUE_STAGES, SECTS
+
+    tech_to_sect = {}
+    for sect_name, sect_info in SECTS.items():
+        for t in sect_info["techniques"]:
+            tech_to_sect[t] = sect_name
+
+    GRADE_ORDER = {
+        "黄级下品": 0, "黄级中品": 1, "黄级上品": 2,
+        "玄级下品": 3, "玄级中品": 4, "玄级上品": 5,
+        "地级下品": 6, "地级中品": 7, "地级上品": 8,
+        "天级下品": 9, "天级中品": 10, "天级上品": 11,
+    }
+    STAT_NAMES = {
+        "physique": "体魄", "bone": "根骨", "soul": "神识",
+        "comprehension": "悟性", "fortune": "机缘",
+        "cultivation_speed": "修炼速度", "escape_rate": "逃跑率",
+        "lifespan_bonus": "寿元上限",
+    }
+
+    all_techs = []
+    for name, info in TECHNIQUES.items():
+        if q and q not in name and q not in info.get("desc", ""):
+            continue
+        if type_filter and info.get("type") != type_filter:
+            continue
+        if grade and info.get("grade") != grade:
+            continue
+
+        stages = []
+        for stage in TECHNIQUE_STAGES:
+            bonuses = {}
+            for stat, val in info.get("stat_bonus", {}).items():
+                if stat in PCT_STATS:
+                    mult = STAGE_PCT_MULTIPLIER.get(stage, 1)
+                    bonuses[STAT_NAMES.get(stat, stat)] = f"+{val * mult:.0%}" if stat == "cultivation_speed" else f"+{val * mult:.1f}"
+                else:
+                    mult = STAGE_STAT_MULTIPLIER.get(stage, 1)
+                    bonuses[STAT_NAMES.get(stat, stat)] = f"+{val * mult:.0f}"
+            stages.append({"stage": stage, "bonuses": bonuses})
+
+        all_techs.append({
+            "name": name,
+            "type": info.get("type", ""),
+            "grade": info.get("grade", ""),
+            "desc": info.get("desc", ""),
+            "stat_bonus": info.get("stat_bonus", {}),
+            "stages": stages,
+            "grade_order": GRADE_ORDER.get(info.get("grade", ""), 99),
+            "sect": tech_to_sect.get(name, ""),
+        })
+
+    all_techs.sort(key=lambda t: (t["grade_order"], t["name"]))
+
+    by_grade = {}
+    for t in all_techs:
+        by_grade.setdefault(t["grade"], []).append(t)
+
+    grade_order_keys = sorted(by_grade.keys(), key=lambda g: GRADE_ORDER.get(g, 99))
+    ordered_by_grade = {g: by_grade[g] for g in grade_order_keys}
+
+    types = ["修炼", "攻击", "防御", "辅助", "特殊"]
+    grades = list(GRADE_ORDER.keys())
+
+    return templates.TemplateResponse("techniques.html", {
+        "request": request,
+        "by_grade": ordered_by_grade,
+        "types": types, "grades": grades,
+        "type_filter": type_filter, "grade": grade, "q": q,
+        "total": len(all_techs),
+        "stat_names": STAT_NAMES,
+        "stages": TECHNIQUE_STAGES,
+    })
+
+
 @app.get("/dead", response_class=HTMLResponse)
 async def dead_players(request: Request):
     with get_conn() as conn:

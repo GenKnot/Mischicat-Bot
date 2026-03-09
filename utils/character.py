@@ -179,6 +179,30 @@ REPUTATION_RESIDENCE = 300
 REPUTATION_CAVE = 600
 
 
+def get_effective_lifespan_max(player: dict) -> int:
+    import json
+    base = player.get("lifespan_max", 100)
+    techniques_raw = player.get("techniques")
+    if not techniques_raw:
+        return base
+    from utils.sects import STAGE_PCT_MULTIPLIER, TECHNIQUES
+    try:
+        techs = json.loads(techniques_raw)
+    except Exception:
+        return base
+    bonus = 0
+    for t in techs:
+        if not t.get("equipped"):
+            continue
+        info = TECHNIQUES.get(t.get("name", ""), {})
+        lb = info.get("stat_bonus", {}).get("lifespan_bonus", 0)
+        if lb:
+            stage = t.get("stage", "入门")
+            mult = STAGE_PCT_MULTIPLIER.get(stage, 1)
+            bonus += int(lb * mult)
+    return base + bonus
+
+
 def get_cultivation_bonus(discord_id: str, current_city: str, cave: str) -> float:
     from utils.db import has_residence, get_conn
     import json

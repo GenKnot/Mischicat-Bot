@@ -6,7 +6,7 @@ from discord.ext import commands, tasks
 
 from utils.character import (
     calc_cultivation_gain, years_to_seconds, seconds_to_years,
-    get_cultivation_bonus, REALM_LIFESPAN,
+    get_cultivation_bonus, get_effective_lifespan_max, REALM_LIFESPAN,
 )
 from utils.realms import (
     cultivation_needed, lifespan_max_for_realm, next_realm,
@@ -171,7 +171,9 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         )
         embed.add_field(name="灵根", value=f"{player['spirit_root_type']}·{player['spirit_root']}（{speed_label}）", inline=False)
         embed.add_field(name="修为", value=f"{player['cultivation']} / {needed}", inline=False)
-        embed.add_field(name="寿元", value=f"{player['lifespan']} / {player['lifespan_max']} 年", inline=True)
+        eff_max = get_effective_lifespan_max(player)
+        lifespan_str = f"{player['lifespan']} / {eff_max} 年" + ("（含功法）" if eff_max > player['lifespan_max'] else "")
+        embed.add_field(name="寿元", value=lifespan_str, inline=True)
         embed.add_field(name="灵石", value=player["spirit_stones"], inline=True)
         embed.add_field(name="悟性", value=player["comprehension"], inline=True)
         embed.add_field(name="体魄", value=player["physique"], inline=True)
@@ -479,7 +481,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             new_cultivation = (p.get("cultivation") or 0) + gain
             if is_dual:
                 new_lifespan = (p.get("lifespan") or 0) + (int(total_years or 0) - actual_years)
-                new_lifespan = min(new_lifespan, int(p.get("lifespan_max") or new_lifespan))
+                new_lifespan = min(new_lifespan, get_effective_lifespan_max(p))
             else:
                 new_lifespan = (p.get("lifespan") or 0) - actual_years
             return actual_years, gain, new_cultivation, new_lifespan
@@ -616,7 +618,9 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         )
         embed.add_field(name="灵根", value=f"{player['spirit_root_type']}·{player['spirit_root']}（{speed_label}）", inline=False)
         embed.add_field(name="修为", value=f"{player['cultivation']} / {needed}", inline=False)
-        embed.add_field(name="寿元", value=f"{player['lifespan']} / {player['lifespan_max']} 年", inline=True)
+        eff_max = get_effective_lifespan_max(player)
+        lifespan_str = f"{player['lifespan']} / {eff_max} 年" + ("（含功法）" if eff_max > player['lifespan_max'] else "")
+        embed.add_field(name="寿元", value=lifespan_str, inline=True)
         embed.add_field(name="灵石", value=player["spirit_stones"], inline=True)
         embed.add_field(name="悟性", value=player["comprehension"], inline=True)
         embed.add_field(name="体魄", value=player["physique"], inline=True)

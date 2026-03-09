@@ -264,6 +264,23 @@ class ToggleEquipView(discord.ui.View):
             return await interaction.response.send_message(f"未习得功法「{name}」。", ephemeral=True)
 
         if target.get("equipped"):
+            tech_info = TECHNIQUES.get(name, {})
+            lifespan_bonus = tech_info.get("stat_bonus", {}).get("lifespan_bonus", 0)
+            if lifespan_bonus > 0:
+                from utils.sects import STAGE_PCT_MULTIPLIER
+                stage = target.get("stage", "入门")
+                mult = STAGE_PCT_MULTIPLIER.get(stage, 1)
+                actual_bonus = int(lifespan_bonus * mult)
+                from utils.character import get_effective_lifespan_max
+                current_eff_max = get_effective_lifespan_max(player)
+                max_after_unequip = current_eff_max - actual_bonus
+                if player["lifespan"] > max_after_unequip:
+                    return await interaction.response.send_message(
+                        f"无法卸下「**{name}**」。\n"
+                        f"当前寿元 **{player['lifespan']}年**，卸下后上限降至 **{max_after_unequip}年**。\n"
+                        f"寿元需先消耗至 **{max_after_unequip}年** 以下方可卸下。",
+                        ephemeral=True
+                    )
             target["equipped"] = False
             _save_techniques(uid, techniques)
             msg = f"已卸下功法「**{name}**」。"

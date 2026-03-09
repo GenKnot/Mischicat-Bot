@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}功法大全 · Mischicat{% endblock %}
+{% block content %}
+
+<style>
+.grade-黄级下品 { color: #9ca3af; }
+.grade-黄级中品 { color: #d1d5db; }
+.grade-黄级上品 { color: #fbbf24; }
+.grade-玄级下品 { color: #34d399; }
+.grade-玄级中品 { color: #6ee7b7; }
+.grade-玄级上品 { color: #10b981; }
+.grade-地级下品 { color: #60a5fa; }
+.grade-地级中品 { color: #93c5fd; }
+.grade-地级上品 { color: #3b82f6; }
+.grade-天级下品 { color: #f87171; }
+.grade-天级中品 { color: #fb923c; }
+.grade-天级上品 { color: #fde68a; text-shadow: 0 0 8px rgba(253,230,138,.5); }
+
+.badge-type-修炼 { background: rgba(16,185,129,.15); color: #10b981; }
+.badge-type-攻击 { background: rgba(239,68,68,.15); color: #f87171; }
+.badge-type-防御 { background: rgba(96,165,250,.15); color: #60a5fa; }
+.badge-type-辅助 { background: rgba(192,132,252,.15); color: #c084fc; }
+.badge-type-特殊 { background: rgba(251,191,36,.15); color: #fbbf24; }
+
+.tech-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin-bottom: 28px;
+}
+.tech-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color .15s;
+}
+.tech-card:hover { border-color: var(--accent); }
+.tech-card.open { border-color: var(--accent); }
+.tech-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.tech-name { font-weight: 600; font-size: 14px; }
+.tech-desc { font-size: 12px; color: var(--muted); line-height: 1.5; margin-bottom: 10px; }
+.tech-stages { display: none; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+.tech-card.open .tech-stages { display: block; }
+.stage-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+  font-size: 12px;
+}
+.stage-row:last-child { border-bottom: none; }
+.stage-label {
+  min-width: 36px;
+  color: var(--muted);
+  font-size: 11px;
+  padding-top: 1px;
+}
+.stage-bonuses { display: flex; flex-wrap: wrap; gap: 5px; }
+.bonus-tag {
+  background: rgba(255,255,255,.06);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  color: var(--accent2);
+}
+.no-bonus { color: var(--muted); font-size: 11px; font-style: italic; }
+</style>
+
+<div class="card" style="margin-bottom:20px">
+  <form method="get" class="filters" style="margin-bottom:0">
+    <input name="q" placeholder="搜索功法名" value="{{ q }}">
+    <select name="type_filter">
+      <option value="">全部类型</option>
+      {% for t in types %}
+      <option value="{{ t }}" {% if type_filter == t %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+    <select name="grade">
+      <option value="">全部品级</option>
+      {% for g in grades %}
+      <option value="{{ g }}" {% if grade == g %}selected{% endif %}>{{ g }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">筛选</button>
+    <a href="/techniques" style="padding:6px 12px;color:var(--muted);font-size:13px">重置</a>
+    <span style="color:var(--muted);font-size:13px;margin-left:8px">共 {{ total }} 个</span>
+  </form>
+</div>
+
+{% for grade_name, tech_list in by_grade.items() %}
+<div class="section-title grade-{{ grade_name }}">{{ grade_name }}（{{ tech_list | length }}）</div>
+<div class="tech-grid">
+  {% for tech in tech_list %}
+  <div class="tech-card" onclick="this.classList.toggle('open')">
+    <div class="tech-header">
+      <span class="tech-name grade-{{ tech.grade }}">{{ tech.name }}</span>
+      <span class="badge badge-type-{{ tech.type }}">{{ tech.type }}</span>
+      {% if tech.sect %}<span class="badge" style="background:rgba(255,255,255,.06);color:var(--muted)">{{ tech.sect }}</span>{% endif %}
+    </div>
+    <div class="tech-desc">{{ tech.desc }}</div>
+    {% if not tech.stat_bonus %}
+    <span class="no-bonus">无属性加成</span>
+    {% else %}
+    <div style="font-size:11px;color:var(--muted)">点击查看各阶段加成 ▾</div>
+    {% endif %}
+    <div class="tech-stages">
+      {% for s in tech.stages %}
+      <div class="stage-row">
+        <span class="stage-label">{{ s.stage }}</span>
+        <div class="stage-bonuses">
+          {% if s.bonuses %}
+            {% for stat, val in s.bonuses.items() %}
+            <span class="bonus-tag">{{ stat }} {{ val }}</span>
+            {% endfor %}
+          {% else %}
+            <span class="no-bonus">无加成</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+
+{% if not by_grade %}
+<div class="card"><p class="empty">没有符合条件的功法</p></div>
+{% endif %}
+
+{% endblock %}

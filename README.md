@@ -20,6 +20,14 @@
 
 第一次运行会自动创建虚拟环境并安装依赖。Bot 和 Web 面板同时启动，面板地址 `http://localhost:8080`。
 
+## Docker
+
+`git clone https://github.com/GenKnot/Mischicat-Bot.git`
+
+`cd Mischicat-Bot`
+
+`docker compose up -d`
+
 ---
 
 ## 内容规模

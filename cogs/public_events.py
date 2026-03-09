@@ -380,8 +380,10 @@ class PublicEventsCog(commands.Cog, name="PublicEvents"):
 
     @commands.hybrid_command(name="公共事件", aliases=["ggsj"], description="查看当前或即将发生的世界公共事件")
     async def show_active_event(self, ctx):
+        from utils.events.public.wanbao import get_active_auction, get_lots, WANBAO_TRIGGER_HOUR
         active = _get_active_event()
         pending = _get_pending_event() if not active else None
+        auction = get_active_auction()
 
         embed = discord.Embed(
             title="✦ 公共事件 ✦",
@@ -409,32 +411,38 @@ class PublicEventsCog(commands.Cog, name="PublicEvents"):
             )
         else:
             embed.add_field(
-                name="暂无事件",
+                name="暂无灵雨事件",
                 value="下次天降灵雨将于今日 22:00（北美东部时间）触发。",
                 inline=False,
             )
 
-        view = PublicEventOverviewView(active, pending, self)
+        if auction:
+            lots = get_lots(auction["auction_id"])
+            status_map = {"pending": "🟡 等待开始", "active": "🔴 进行中", "ended": "⚫ 已结束"}
+            status_text = status_map.get(auction["status"], auction["status"])
+            if auction["status"] == "active":
+                remaining_auction = max(0, auction["ends_at"] - time.time())
+                detail = f"当前拍品剩余：**{remaining_auction/60:.0f} 分{int(remaining_auction%60):02d}秒**"
+            elif auction["status"] == "pending":
+                detail = f"北美东部时间 **{WANBAO_TRIGGER_HOUR}:00** 开始"
+            else:
+                detail = "本次拍卖已结束"
+            embed.add_field(
+                name=f"✦ 万宝楼大型拍卖会 · {status_text}",
+                value=f"拍品共 **{len(lots)}** 件　{detail}\n前往 **万宝楼** 参与竞拍",
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="✦ 万宝楼大型拍卖会",
+                value=f"今日拍卖会将于北美东部时间 **{WANBAO_TRIGGER_HOUR}:00** 举行，届时前往 **万宝楼** 参与。",
+                inline=False,
+            )
+
+        view = PublicEventOverviewView(active, pending, auction, self)
         await ctx.send(ctx.author.mention, embed=embed, view=view)
 
-    @commands.hybrid_command(name="预备灵雨", aliases=["ybly"], description="手动预备一场天降灵雨事件（管理员）")
-    @commands.has_permissions(administrator=True)
-    async def prepare_spirit_rain(self, ctx, city: str = None):
-        from utils.world import CITIES
-        if not city:
-            city = random.choice(CITIES)["name"]
-        event_id = str(uuid.uuid4())[:8]
-        now_mt = _montreal_now()
-        today_str = now_mt.strftime("%Y-%m-%d")
-        trigger_ts = _today_trigger_ts()
-        data = {"city": city, "trigger_date": today_str, "beast_tide": False}
-        with get_conn() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO public_events (event_id, event_type, title, started_at, ends_at, status, data) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-                (event_id, "spirit_rain", "天降灵雨", trigger_ts, trigger_ts + 3600, json.dumps(data))
-            )
-            conn.commit()
-        await ctx.send(f"{ctx.author.mention} 已预备灵雨事件，城市：**{city}**，事件ID：`{event_id}`")
+
 
 
 class TravelToEventView(discord.ui.View):
@@ -576,7 +584,7 @@ class ConfirmStopAndTravelView(discord.ui.View):
 
 
 class PublicEventOverviewView(discord.ui.View):
-    def __init__(self, active: dict | None, pending: dict | None, pe_cog=None):
+    def __init__(self, active: dict | None, pending: dict | None, auction: dict | None = None, pe_cog=None):
         super().__init__(timeout=120)
         self.active = active
         self.pending = pending
@@ -588,6 +596,8 @@ class PublicEventOverviewView(discord.ui.View):
             data = json.loads(event["data"])
             city = data.get("city", "未知城市")
             self.add_item(_TravelButton(city, event["event_id"]))
+        if auction and auction["status"] in ("pending", "active"):
+            self.add_item(_WanbaoEventButton(pe_cog))
         self.add_item(_PEBackToMenuButton(pe_cog))
 
 
@@ -688,6 +698,34 @@ class _EventDetailButton(discord.ui.Button):
             )
 
 
+class _WanbaoEventButton(discord.ui.Button):
+    def __init__(self, pe_cog=None):
+        super().__init__(label="万宝楼拍卖会", style=discord.ButtonStyle.primary)
+        self.pe_cog = pe_cog
+
+    async def callback(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        with get_conn() as conn:
+            row = conn.execute("SELECT current_city FROM players WHERE discord_id = ?", (uid,)).fetchone()
+        if not row:
+            return await interaction.response.send_message("尚未创建角色。", ephemeral=True)
+        if row["current_city"] != "万宝楼":
+            view = discord.ui.View(timeout=None)
+            view.add_item(_WanbaoTravelButton())
+            return await interaction.response.send_message(
+                "需前往 **万宝楼** 方可参与拍卖会。",
+                view=view,
+                ephemeral=True,
+            )
+        pe_cog = self.pe_cog
+        if not pe_cog:
+            return await interaction.response.send_message("系统暂时不可用。", ephemeral=True)
+        ctx = await pe_cog.bot.get_context(interaction.message)
+        ctx.author = interaction.user
+        await interaction.response.defer()
+        await pe_cog.wanbao(ctx)
+
+
 class _PEBackToMenuButton(discord.ui.Button):
     def __init__(self, pe_cog=None):
         super().__init__(label="返回主菜单", style=discord.ButtonStyle.secondary)
@@ -744,7 +782,9 @@ class _BackToOverviewView(discord.ui.View):
             embed.add_field(name=f"🟡 {pending['title']} · 即将开始", value=f"城市：**{city}**　约 **{remaining/60:.0f} 分钟**后开始", inline=False)
         else:
             embed.add_field(name="暂无事件", value="下次天降灵雨将于今日 22:00（北美东部时间）触发。", inline=False)
-        await interaction.followup.send(embed=embed, view=PublicEventOverviewView(active, pending, self.pe_cog), ephemeral=True)
+        from utils.events.public.wanbao import get_active_auction
+        auction = get_active_auction()
+        await interaction.followup.send(embed=embed, view=PublicEventOverviewView(active, pending, auction, self.pe_cog), ephemeral=True)
 
     @discord.ui.button(label="返回主菜单", style=discord.ButtonStyle.secondary)
     async def back_menu(self, interaction: discord.Interaction, button: discord.ui.Button):

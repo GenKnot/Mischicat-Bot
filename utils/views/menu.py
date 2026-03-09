@@ -135,7 +135,6 @@ def _build_menu_embed(has_dual: bool = False, event_hint: str = "") -> discord.E
         name="公共事件 / 其他",
         value="\n".join([
             f"`{COMMAND_PREFIX}公共事件` / `{COMMAND_PREFIX}ggsj`：查看当前事件",
-            f"`{COMMAND_PREFIX}预备灵雨` / `{COMMAND_PREFIX}ybly`：预备灵雨（管理员）",
             f"`{COMMAND_PREFIX}解散队伍` / `{COMMAND_PREFIX}jsdw`：解散队伍",
             f"`join/leave/play(p)/pause/resume/stop/skip/queue`：音乐指令",
         ]),
@@ -200,6 +199,11 @@ class MainMenuView(discord.ui.View):
             for sect_name in _get_joinable_sects(player):
                 self.add_item(MenuButton(f"加入{sect_name}", discord.ButtonStyle.success, f"join_sect:{sect_name}"))
         self.add_item(MenuButton("公共事件", discord.ButtonStyle.secondary, "public_event"))
+        if player and player.get("current_city") == "万宝楼":
+            from utils.events.public.wanbao import get_active_auction
+            auction = get_active_auction()
+            if auction:
+                self.add_item(MenuButton("万宝楼", discord.ButtonStyle.primary, "wanbao"))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user != self.author:
@@ -386,6 +390,14 @@ class MenuButton(discord.ui.Button):
                     await pe_cog.show_active_event(ctx)
                 else:
                     await interaction.followup.send("公共事件系统暂时不可用。", ephemeral=True)
+            elif self.action == "wanbao":
+                pe_cog = cog.bot.cogs.get("PublicEvents")
+                if pe_cog:
+                    ctx = await cog.bot.get_context(interaction.message)
+                    ctx.author = interaction.user
+                    await pe_cog.wanbao(ctx)
+                else:
+                    await interaction.followup.send("万宝楼系统暂时不可用。", ephemeral=True)
             elif self.action == "back_to_menu":
                 import json
                 uid = str(interaction.user.id)

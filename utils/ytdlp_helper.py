@@ -86,3 +86,21 @@ def get_ytdl(with_cookies: bool = True):
         elif _browser:
             opts["cookiesfrombrowser"] = (_browser,)
     return yt_dlp.YoutubeDL(opts)
+
+
+def build_ffmpeg_options(http_headers: dict | None = None):
+    """
+    Build per-track ffmpeg options.
+
+    Some sites (e.g. bilibili) require specific HTTP headers (User-Agent, Referer)
+    on the media request. yt_dlp exposes these via the `http_headers` field in
+    the extraction result. We inject them into ffmpeg via the -headers option.
+    """
+    opts = dict(FFMPEG_OPTIONS)
+    if http_headers:
+        # Build header block as required by ffmpeg: one header per line, CRLF-terminated.
+        header_lines = "".join(f"{k}: {v}\r\n" for k, v in http_headers.items())
+        extra = f'-headers "{header_lines}"'
+        before = opts.get("before_options", "")
+        opts["before_options"] = (before + " " + extra).strip()
+    return opts

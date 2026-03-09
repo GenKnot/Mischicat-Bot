@@ -4,7 +4,7 @@ from collections import deque
 import discord
 from discord.ext import commands
 
-from utils.ytdlp_helper import FFMPEG_OPTIONS, get_ytdl
+from utils.ytdlp_helper import build_ffmpeg_options, get_ytdl
 
 
 class MusicCog(commands.Cog, name="Music"):
@@ -60,7 +60,8 @@ class MusicCog(commands.Cog, name="Music"):
 
             asyncio.run_coroutine_threadsafe(ctx.send(embed=embed), self.bot.loop)
 
-            audio = discord.FFmpegPCMAudio(source_info["url"], **FFMPEG_OPTIONS)
+            ffmpeg_opts = build_ffmpeg_options(source_info.get("http_headers"))
+            audio = discord.FFmpegPCMAudio(source_info["url"], **ffmpeg_opts)
             ctx.voice_client.play(
                 audio,
                 after=lambda e: asyncio.run_coroutine_threadsafe(
@@ -144,6 +145,7 @@ class MusicCog(commands.Cog, name="Music"):
                     "artist": first.get("artist"),
                     "track": first.get("track"),
                     "uploader": first.get("uploader"),
+                    "http_headers": first.get("http_headers") or data.get("http_headers"),
                     "playlist_query": query,
                     "is_first_from_playlist": True,
                 }
@@ -183,6 +185,7 @@ class MusicCog(commands.Cog, name="Music"):
                             "artist": first.get("artist"),
                             "track": first.get("track"),
                             "uploader": first.get("uploader"),
+                            "http_headers": first.get("http_headers") or data.get("http_headers"),
                         }
                         self.queue.append(info)
                         await ctx.send(f"添加到队列: **{info['title']}**")
@@ -195,6 +198,7 @@ class MusicCog(commands.Cog, name="Music"):
                                 "artist": e.get("artist"),
                                 "track": e.get("track"),
                                 "uploader": e.get("uploader"),
+                                "http_headers": e.get("http_headers") or data.get("http_headers"),
                             }
                             self.queue.append(info)
                         await ctx.send(
@@ -208,6 +212,7 @@ class MusicCog(commands.Cog, name="Music"):
                         "artist": data.get("artist"),
                         "track": data.get("track"),
                         "uploader": data.get("uploader"),
+                        "http_headers": data.get("http_headers"),
                     }
                     self.queue.append(info)
                     await ctx.send(f"添加到队列: **{info['title']}**")
@@ -258,6 +263,7 @@ class MusicCog(commands.Cog, name="Music"):
                 "artist": e.get("artist"),
                 "track": e.get("track"),
                 "uploader": e.get("uploader"),
+                "http_headers": e.get("http_headers") or data.get("http_headers"),
             }
             self.queue.append(info)
 

@@ -1,4 +1,5 @@
 discord.py
+tzdata
 yt-dlp
 PyNaCl
 python-dotenv

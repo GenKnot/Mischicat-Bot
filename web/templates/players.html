@@ -52,6 +52,8 @@
           <span class="badge badge-teal">闭关中</span>
         {% elif p.gathering_until and p.gathering_until > now_ts %}
           <span class="badge badge-yellow">采集中</span>
+        {% elif p.active_quest and p.quest_due and p.quest_due > now_ts %}
+          <span class="badge badge-purple">任务中</span>
         {% else %}
           <span class="badge badge-gray">空闲</span>
         {% endif %}

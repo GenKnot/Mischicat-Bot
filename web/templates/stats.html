@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}属性榜 · Mischicat{% endblock %}
+{% block content %}
+
+<style>
+.stats-table { font-size: 13px; }
+.stats-table th, .stats-table td {
+  text-align: center;
+  white-space: nowrap;
+}
+.stats-table th a {
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.stats-table th a:hover { color: var(--text); }
+.stats-table th a.active { color: var(--accent); }
+.num-cell { font-variant-numeric: tabular-nums; }
+</style>
+
+<div class="card">
+  <h2>属性榜（{{ players | length }} 人）</h2>
+
+  {% macro sort_link(col, label) %}
+    {% if sort == col %}
+      {% set next_order = "asc" if order == "desc" else "desc" %}
+      {% set arrow = "▲" if order == "asc" else "▼" %}
+      <a href="/stats?sort={{ col }}&order={{ next_order }}" class="active">{{ label }} {{ arrow }}</a>
+    {% else %}
+      <a href="/stats?sort={{ col }}&order=desc">{{ label }}</a>
+    {% endif %}
+  {% endmacro %}
+
+  <div style="overflow-x:auto">
+  <table class="stats-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>{{ sort_link("name", "道号") }}</th>
+        <th>{{ sort_link("realm", "境界") }}</th>
+        <th>{{ sort_link("cultivation", "修为") }}</th>
+        <th>{{ sort_link("lifespan", "寿元") }}</th>
+        <th>{{ sort_link("spirit_stones", "灵石") }}</th>
+        <th>{{ sort_link("reputation", "声望") }}</th>
+        <th>{{ sort_link("comprehension", "悟性") }}</th>
+        <th>{{ sort_link("physique", "体魄") }}</th>
+        <th>{{ sort_link("fortune", "机缘") }}</th>
+        <th>{{ sort_link("bone", "根骨") }}</th>
+        <th>{{ sort_link("soul", "神识") }}</th>
+        <th>{{ sort_link("stat_total", "属性总和") }}</th>
+        <th>{{ sort_link("rebirth_count", "轮回") }}</th>
+        <th>灵根</th>
+        <th>城市</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for p in players %}
+    <tr>
+      <td style="color:var(--muted)">{{ loop.index }}</td>
+      <td><a href="/players/{{ p.discord_id }}">{{ p.name }}</a></td>
+      <td><span class="badge badge-purple">{{ p.realm }}</span></td>
+      <td class="num-cell">{{ p.cultivation }}</td>
+      <td class="num-cell">{{ p.lifespan }} / {{ p.lifespan_max }}</td>
+      <td class="num-cell">{{ p.spirit_stones }}</td>
+      <td class="num-cell">{{ p.reputation }}</td>
+      <td class="num-cell" style="color:{% if p.comprehension >= 10 %}var(--accent){% else %}var(--text){% endif %}">{{ p.comprehension }}</td>
+      <td class="num-cell" style="color:{% if p.physique >= 10 %}var(--accent){% else %}var(--text){% endif %}">{{ p.physique }}</td>
+      <td class="num-cell" style="color:{% if p.fortune >= 10 %}var(--accent){% else %}var(--text){% endif %}">{{ p.fortune }}</td>
+      <td class="num-cell" style="color:{% if p.bone >= 10 %}var(--accent){% else %}var(--text){% endif %}">{{ p.bone }}</td>
+      <td class="num-cell" style="color:{% if p.soul >= 10 %}var(--accent){% else %}var(--text){% endif %}">{{ p.soul }}</td>
+      <td class="num-cell" style="color:var(--accent2);font-weight:600">{{ p.stat_total }}</td>
+      <td class="num-cell">{% if p.rebirth_count > 0 %}<span class="badge badge-yellow">{{ p.rebirth_count }}</span>{% else %}—{% endif %}</td>
+      <td>{{ p.spirit_root_type }}</td>
+      <td>{{ p.current_city }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

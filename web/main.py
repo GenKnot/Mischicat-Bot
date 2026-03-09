@@ -50,19 +50,45 @@ templates.env.globals["now"] = time.time
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     with get_conn() as conn:
+        now = time.time()
         total = conn.execute("SELECT COUNT(*) FROM players WHERE is_dead=0").fetchone()[0]
         dead = conn.execute("SELECT COUNT(*) FROM players WHERE is_dead=1").fetchone()[0]
         cultivating = conn.execute(
-            "SELECT COUNT(*) FROM players WHERE cultivating_until > ? AND is_dead=0", (time.time(),)
+            "SELECT COUNT(*) FROM players WHERE cultivating_until > ? AND is_dead=0", (now,)
+        ).fetchone()[0]
+        on_quest = conn.execute(
+            "SELECT COUNT(*) FROM players WHERE active_quest IS NOT NULL AND quest_due > ? AND is_dead=0", (now,)
+        ).fetchone()[0]
+        gathering = conn.execute(
+            "SELECT COUNT(*) FROM players WHERE gathering_until > ? AND is_dead=0", (now,)
         ).fetchone()[0]
         events = conn.execute(
             "SELECT * FROM public_events ORDER BY started_at DESC LIMIT 5"
         ).fetchall()
         events = [dict(e) for e in events]
+        realm_dist = conn.execute(
+            "SELECT realm, COUNT(*) as cnt FROM players WHERE is_dead=0 GROUP BY realm ORDER BY cnt DESC"
+        ).fetchall()
+        realm_dist = [dict(r) for r in realm_dist]
+        recent = conn.execute(
+            "SELECT * FROM players WHERE is_dead=0 ORDER BY last_active DESC LIMIT 8"
+        ).fetchall()
+        recent = [dict(r) for r in recent]
+        top_stones = conn.execute(
+            "SELECT name, spirit_stones, realm, discord_id FROM players WHERE is_dead=0 ORDER BY spirit_stones DESC LIMIT 5"
+        ).fetchall()
+        top_stones = [dict(r) for r in top_stones]
+        top_stats = conn.execute(
+            "SELECT name, realm, discord_id, (comprehension+physique+fortune+bone+soul) as total "
+            "FROM players WHERE is_dead=0 ORDER BY total DESC LIMIT 5"
+        ).fetchall()
+        top_stats = [dict(r) for r in top_stats]
     return templates.TemplateResponse("index.html", {
         "request": request,
         "total": total, "dead": dead, "cultivating": cultivating,
-        "events": events,
+        "on_quest": on_quest, "gathering": gathering,
+        "events": events, "realm_dist": realm_dist,
+        "recent": recent, "top_stones": top_stones, "top_stats": top_stats,
     })
 
 
@@ -146,6 +172,61 @@ async def events(request: Request):
             events.append(e)
     return templates.TemplateResponse("events.html", {
         "request": request, "events": events,
+    })
+
+
+@app.get("/items", response_class=HTMLResponse)
+async def items_page(request: Request, type_filter: str = "", rarity: str = "", q: str = ""):
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    from utils.items import ITEMS
+    TYPE_LABEL = {"pill": "丹药", "ore": "矿石", "wood": "灵木", "fish": "灵鱼", "herb": "草药", "tool": "工具"}
+    RARITY_ORDER = {"普通": 0, "稀有": 1, "珍贵": 2, "绝世": 3}
+    all_items = list(ITEMS.values())
+    if q:
+        all_items = [i for i in all_items if q in i["name"] or q in i.get("desc", "")]
+    if type_filter:
+        all_items = [i for i in all_items if i.get("type") == type_filter]
+    if rarity:
+        all_items = [i for i in all_items if i.get("rarity") == rarity]
+    all_items.sort(key=lambda i: (RARITY_ORDER.get(i.get("rarity", "普通"), 0), i.get("sell_price", 0)), reverse=True)
+    by_type = {}
+    for item in all_items:
+        t = TYPE_LABEL.get(item.get("type", ""), item.get("type", "其他"))
+        by_type.setdefault(t, []).append(item)
+    types = list(TYPE_LABEL.values())
+    rarities = ["普通", "稀有", "珍贵", "绝世"]
+    return templates.TemplateResponse("items.html", {
+        "request": request,
+        "by_type": by_type, "type_map": TYPE_LABEL, "rarities": rarities,
+        "type_filter": type_filter, "rarity": rarity, "q": q,
+        "total": len(all_items),
+    })
+
+
+@app.get("/stats", response_class=HTMLResponse)
+async def stats(request: Request, sort: str = "cultivation", order: str = "desc"):
+    allowed = {"cultivation", "lifespan", "spirit_stones", "reputation",
+               "comprehension", "physique", "fortune", "bone", "soul",
+               "name", "realm", "rebirth_count", "stat_total"}
+    if sort not in allowed:
+        sort = "cultivation"
+    direction = "DESC" if order != "asc" else "ASC"
+    with get_conn() as conn:
+        if sort == "stat_total":
+            rows = conn.execute(
+                "SELECT *, (comprehension+physique+fortune+bone+soul) as stat_total "
+                f"FROM players WHERE is_dead=0 ORDER BY stat_total {direction}"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT *, (comprehension+physique+fortune+bone+soul) as stat_total "
+                f"FROM players WHERE is_dead=0 ORDER BY {sort} {direction}"
+            ).fetchall()
+    return templates.TemplateResponse("stats.html", {
+        "request": request,
+        "players": [dict(r) for r in rows],
+        "sort": sort, "order": order,
     })
 
 

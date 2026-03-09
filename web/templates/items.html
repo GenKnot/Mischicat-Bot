@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}物品图鉴 · Mischicat{% endblock %}
+{% block content %}
+
+<style>
+.rarity-普通 { color: var(--text); }
+.rarity-稀有 { color: #60a5fa; }
+.rarity-珍贵 { color: #c084fc; }
+.rarity-绝世 { color: #fbbf24; }
+.badge-rarity-普通 { background: rgba(255,255,255,.08); color: var(--muted); }
+.badge-rarity-稀有 { background: rgba(96,165,250,.15); color: #60a5fa; }
+.badge-rarity-珍贵 { background: rgba(192,132,252,.15); color: #c084fc; }
+.badge-rarity-绝世 { background: rgba(251,191,36,.15); color: #fbbf24; }
+.item-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.item-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  transition: border-color .15s;
+}
+.item-card:hover { border-color: var(--accent); }
+.item-name { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+.item-desc { font-size: 12px; color: var(--muted); line-height: 1.5; margin-bottom: 8px; }
+.item-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.item-price { font-size: 12px; color: var(--warning); }
+.item-element { font-size: 11px; color: var(--accent2); }
+</style>
+
+<div class="card" style="margin-bottom:20px">
+  <form method="get" class="filters" style="margin-bottom:0">
+    <input name="q" placeholder="搜索物品名" value="{{ q }}">
+    <select name="type_filter">
+      <option value="">全部类型</option>
+      {% for key, label in type_map.items() %}
+      <option value="{{ key }}" {% if type_filter == key %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <select name="rarity">
+      <option value="">全部品质</option>
+      {% for r in rarities %}
+      <option value="{{ r }}" {% if rarity == r %}selected{% endif %}>{{ r }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">筛选</button>
+    <a href="/items" style="padding:6px 12px;color:var(--muted);font-size:13px">重置</a>
+    <span style="color:var(--muted);font-size:13px;margin-left:8px">共 {{ total }} 件</span>
+  </form>
+</div>
+
+{% for type_name, item_list in by_type.items() %}
+<div class="section-title">{{ type_name }}（{{ item_list | length }}）</div>
+<div class="item-grid" style="margin-bottom:24px">
+  {% for item in item_list %}
+  <div class="item-card">
+    <div class="item-name rarity-{{ item.rarity }}">{{ item.name }}</div>
+    <div class="item-desc">{{ item.desc }}</div>
+    <div class="item-meta">
+      <span class="badge badge-rarity-{{ item.rarity }}">{{ item.rarity }}</span>
+      {% if item.sell_price %}<span class="item-price">💰 {{ item.sell_price }} 灵石</span>{% endif %}
+      {% if item.element %}<span class="item-element">【{{ item.element }}属】</span>{% endif %}
+      {% if item.effect %}
+        {% for k, v in item.effect.items() %}
+        <span style="font-size:11px;color:var(--accent2)">{{ k }}: {{ v }}</span>
+        {% endfor %}
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+
+{% if not by_type %}
+<div class="card"><p class="empty">没有符合条件的物品</p></div>
+{% endif %}
+
+{% endblock %}

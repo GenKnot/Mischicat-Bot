@@ -88,6 +88,17 @@
     ⛏️ {{ player.gathering_type or "采集" }}中，剩余 <strong>{{ duration_left(player.gathering_until) }}</strong>
   </div>
   {% endif %}
+  {% if quest %}
+  <div style="background:rgba(124,106,247,.08);border:1px solid rgba(124,106,247,.2);border-radius:8px;padding:12px;margin-bottom:12px">
+    📋 任务中：<strong>{{ quest.title or quest.name }}</strong>，
+    {% set left = duration_left(player.quest_due) %}
+    {% if left == "已结束" %}
+    <span style="color:var(--success)">可交任务</span>
+    {% else %}
+    剩余 <strong>{{ left }}</strong>
+    {% endif %}
+  </div>
+  {% endif %}
 </div>
 
 {% if player.techniques %}
@@ -105,9 +116,18 @@
 <div class="section-title">当前任务</div>
 <div class="card">
   <table>
-    <tr><td style="color:var(--muted);width:100px">任务名</td><td>{{ quest.name or "—" }}</td></tr>
+    <tr><td style="color:var(--muted);width:100px">任务名</td><td>{{ quest.title or quest.name or "—" }}</td></tr>
+    <tr><td style="color:var(--muted)">等级</td><td>
+      {% if quest.tier == "传说" %}<span class="badge badge-purple">{{ quest.tier }}</span>
+      {% elif quest.tier == "精英" %}<span class="badge badge-yellow">{{ quest.tier }}</span>
+      {% else %}<span class="badge badge-gray">{{ quest.tier or "普通" }}</span>{% endif %}
+    </td></tr>
     <tr><td style="color:var(--muted)">到期时间</td><td>{{ ts(player.quest_due) }}</td></tr>
-    <tr><td style="color:var(--muted)">剩余时间</td><td>{{ duration_left(player.quest_due) or "—" }}</td></tr>
+    <tr><td style="color:var(--muted)">剩余时间</td><td>
+      {% set left = duration_left(player.quest_due) %}
+      {% if left == "已结束" %}<span style="color:var(--success)">可交任务</span>
+      {% else %}{{ left or "—" }}{% endif %}
+    </td></tr>
   </table>
 </div>
 {% endif %}

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}总览 · Mischicat{% endblock %}
 {% block content %}
+
 <div class="stats-grid">
   <div class="stat-card">
     <div class="num">{{ total }}</div>
@@ -11,9 +12,89 @@
     <div class="label">闭关中</div>
   </div>
   <div class="stat-card">
+    <div class="num" style="color:var(--warning)">{{ on_quest }}</div>
+    <div class="label">任务中</div>
+  </div>
+  <div class="stat-card">
+    <div class="num" style="color:var(--success)">{{ gathering }}</div>
+    <div class="label">采集中</div>
+  </div>
+  <div class="stat-card">
     <div class="num" style="color:var(--muted)">{{ dead }}</div>
     <div class="label">已坐化</div>
   </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+
+  <div class="card">
+    <h2>境界分布</h2>
+    {% for r in realm_dist %}
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <span style="width:130px;font-size:13px">{{ r.realm }}</span>
+      <div style="flex:1;background:var(--border);border-radius:99px;height:8px;overflow:hidden">
+        <div style="width:{{ ((r.cnt / total) * 100) | int }}%;height:100%;background:var(--accent);border-radius:99px"></div>
+      </div>
+      <span style="color:var(--muted);font-size:12px;width:24px;text-align:right">{{ r.cnt }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    <h2>最近活跃</h2>
+    <table>
+      <thead><tr><th>道号</th><th>境界</th><th>城市</th><th>活跃时间</th></tr></thead>
+      <tbody>
+      {% for p in recent %}
+      <tr>
+        <td><a href="/players/{{ p.discord_id }}">{{ p.name }}</a></td>
+        <td><span class="badge badge-purple">{{ p.realm }}</span></td>
+        <td>{{ p.current_city }}</td>
+        <td style="color:var(--muted);font-size:12px">{{ ts(p.last_active) }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+
+  <div class="card">
+    <h2>灵石榜 Top 5</h2>
+    <table>
+      <thead><tr><th>#</th><th>道号</th><th>境界</th><th>灵石</th></tr></thead>
+      <tbody>
+      {% for p in top_stones %}
+      <tr>
+        <td style="color:var(--muted)">{{ loop.index }}</td>
+        <td><a href="/players/{{ p.discord_id }}">{{ p.name }}</a></td>
+        <td><span class="badge badge-purple">{{ p.realm }}</span></td>
+        <td style="color:var(--warning);font-weight:600">{{ p.spirit_stones }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>属性榜 Top 5</h2>
+    <table>
+      <thead><tr><th>#</th><th>道号</th><th>境界</th><th>属性总和</th></tr></thead>
+      <tbody>
+      {% for p in top_stats %}
+      <tr>
+        <td style="color:var(--muted)">{{ loop.index }}</td>
+        <td><a href="/players/{{ p.discord_id }}">{{ p.name }}</a></td>
+        <td><span class="badge badge-purple">{{ p.realm }}</span></td>
+        <td style="color:var(--accent2);font-weight:600">{{ p.total }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
 </div>
 
 <div class="card">
@@ -21,9 +102,7 @@
   {% if events %}
   <table>
     <thead>
-      <tr>
-        <th>事件</th><th>类型</th><th>状态</th><th>开始时间</th><th>结束时间</th>
-      </tr>
+      <tr><th>事件</th><th>类型</th><th>状态</th><th>开始时间</th><th>结束时间</th></tr>
     </thead>
     <tbody>
     {% for e in events %}
@@ -31,13 +110,9 @@
       <td><a href="/events">{{ e.title }}</a></td>
       <td><span class="badge badge-purple">{{ e.event_type }}</span></td>
       <td>
-        {% if e.status == "active" %}
-          <span class="badge badge-green">进行中</span>
-        {% elif e.status == "ended" %}
-          <span class="badge badge-gray">已结束</span>
-        {% else %}
-          <span class="badge badge-yellow">{{ e.status }}</span>
-        {% endif %}
+        {% if e.status == "active" %}<span class="badge badge-green">进行中</span>
+        {% elif e.status == "ended" %}<span class="badge badge-gray">已结束</span>
+        {% else %}<span class="badge badge-yellow">{{ e.status }}</span>{% endif %}
       </td>
       <td>{{ ts(e.started_at) }}</td>
       <td>{{ ts(e.ends_at) }}</td>
@@ -49,4 +124,5 @@
   <p class="empty">暂无事件记录</p>
   {% endif %}
 </div>
+
 {% endblock %}

@@ -9,5 +9,6 @@ downloads/*
 !downloads/.gitkeep
 game.db
 /.idea
+/.vscode
 PROGRESS.md
 requirement.md

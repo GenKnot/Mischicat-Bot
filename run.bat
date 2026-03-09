@@ -26,6 +26,6 @@ if not exist "%VENV_PY%" (
 )
 
 call "%VENV_DIR%\Scripts\activate.bat"
-python "run.py"
+python "main.py"
 exit /b %errorlevel%
 

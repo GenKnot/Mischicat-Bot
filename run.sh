@@ -37,5 +37,5 @@ else
   exit 1
 fi
 
-python run.py
+python main.py
 

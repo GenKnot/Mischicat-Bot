@@ -2,7 +2,7 @@
 
 一个跑在 Discord 上的修仙放置游戏。前缀 `cat!`，数据存 SQLite，Web 管理面板跑在 8080 端口。
 
-贡献者：[@GenKnot](https://github.com/GenKnot) · [@AdoreJch](https://github.com/AdoreJch) · [@yulexun](https://github.com/yulexun)
+贡献者：[@GenKnot](https://github.com/GenKnot) · [@AdoreJc](https://github.com/AdoreJc) · [@yulexun](https://github.com/yulexun)
 
 ---
 

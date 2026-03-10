@@ -880,12 +880,13 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         inv_needed = cultivation_needed(inv_p["realm"])
         tgt_needed = cultivation_needed(tgt_p["realm"])
         if both_virgin:
+            gender_word = "处男" if (inv_virgin and inv_p["gender"] == "男") or (tgt_virgin and tgt_p["gender"] == "男") else "处女"
             flavor = (
                 "灵气缠绵，呼吸交织，两道身影在朦胧的灵雾中渐渐靠近……\n"
                 "初尝禁果，羞意难掩，却又欲罢不能。\n"
                 "阴阳之力在体内激荡翻涌，如决堤之水，修为暴涨。\n\n"
-                f"💮 **{inviter.display_name}** 失去了处男状态\n"
-                f"💮 **{target.display_name}** 失去了处女状态\n\n"
+                f"💮 **{inviter.display_name}** 失去了{gender_word}状态\n"
+                f"💮 **{target.display_name}** 失去了{gender_word}状态\n\n"
                 f"修为暴涨（**{multiplier:.1f}倍**）"
             )
         elif inv_virgin or tgt_virgin:

@@ -421,3 +421,50 @@ async def dead_players(request: Request):
     return templates.TemplateResponse("dead.html", {
         "request": request, "players": [dict(r) for r in rows],
     })
+
+
+@app.get("/world", response_class=HTMLResponse)
+async def world_page(request: Request):
+    import sys, os
+    _utils = os.path.normpath(os.path.join(_base, "..")) if _base != os.path.dirname(os.path.dirname(os.path.abspath(__file__))) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _utils not in sys.path:
+        sys.path.insert(0, _utils)
+    from utils.world import CITIES, SPECIAL_REGIONS
+    from utils.sects import SECTS
+
+    regions_order = ["中州", "东域", "南域", "西域", "北域"]
+    cities_by_region = {}
+    for r in regions_order:
+        cities_by_region[r] = [c for c in CITIES if c["region"] == r]
+
+    with get_conn() as conn:
+        city_counts = {
+            row["current_city"]: row["cnt"]
+            for row in conn.execute(
+                "SELECT current_city, COUNT(*) as cnt FROM players WHERE is_dead=0 GROUP BY current_city"
+            ).fetchall()
+        }
+        sect_counts = {
+            row["sect"]: row["cnt"]
+            for row in conn.execute(
+                "SELECT sect, COUNT(*) as cnt FROM players WHERE is_dead=0 AND sect IS NOT NULL GROUP BY sect"
+            ).fetchall()
+        }
+
+    alignment_order = ["正道", "邪道", "隐世"]
+    sects_by_alignment = {}
+    for a in alignment_order:
+        sects_by_alignment[a] = [
+            {"name": k, **v} for k, v in SECTS.items() if v["alignment"] == a
+        ]
+
+    return templates.TemplateResponse("world.html", {
+        "request": request,
+        "cities_by_region": cities_by_region,
+        "regions_order": regions_order,
+        "special_regions": SPECIAL_REGIONS,
+        "sects_by_alignment": sects_by_alignment,
+        "alignment_order": alignment_order,
+        "city_counts": city_counts,
+        "sect_counts": sect_counts,
+    })

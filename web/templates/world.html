@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}世界 · Mischicat{% endblock %}
+{% block content %}
+
+<div class="stats-grid" style="margin-bottom:32px">
+  <div class="stat-card"><div class="num">30</div><div class="label">城市</div></div>
+  <div class="stat-card"><div class="num" style="color:var(--accent2)">12</div><div class="label">秘地</div></div>
+  <div class="stat-card"><div class="num" style="color:var(--warning)">15</div><div class="label">宗门</div></div>
+  <div class="stat-card"><div class="num" style="color:var(--success)">5</div><div class="label">区域</div></div>
+</div>
+
+<div class="section-title">城市</div>
+{% for region in regions_order %}
+<div class="world-section">
+  <div class="world-section-header">
+    <span class="world-region-tag">{{ region }}</span>
+    <span class="world-section-count">{{ cities_by_region[region] | length }} 座城市</span>
+  </div>
+  <div class="world-card-grid">
+    {% for city in cities_by_region[region] %}
+    {% set cnt = city_counts.get(city.name, 0) %}
+    <div class="world-mini-card">
+      <div class="world-mini-header">
+        <span class="world-mini-name">{{ city.name }}</span>
+        {% if cnt > 0 %}<span class="world-mini-badge">{{ cnt }}人</span>{% endif %}
+      </div>
+      <div class="world-mini-desc">{{ city.desc }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endfor %}
+
+<div class="section-title" style="margin-top:32px">秘地</div>
+<div class="world-section">
+  <div class="world-card-grid">
+    {% for r in special_regions %}
+    <div class="world-mini-card world-mini-card--special">
+      <div class="world-mini-header">
+        <span class="world-mini-name">{{ r.name }}</span>
+        <span class="world-type-tag">{{ r.type }}</span>
+      </div>
+      <div class="world-mini-req">最低境界：{{ r.min_realm }}</div>
+      <div class="world-mini-desc">{{ r.desc }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="section-title" style="margin-top:32px">宗门</div>
+{% for alignment in alignment_order %}
+<div class="world-section world-section--sect">
+  <div class="world-section-header">
+    <span class="world-align-tag world-align-tag--{{ alignment }}">{{ alignment }}</span>
+    <span class="world-section-count">{{ sects_by_alignment[alignment] | length }} 个宗门</span>
+  </div>
+  <div class="world-card-grid world-card-grid--sect">
+    {% for sect in sects_by_alignment[alignment] %}
+    {% set cnt = sect_counts.get(sect.name, 0) %}
+    <div class="world-sect-card">
+      <div class="world-sect-top">
+        <div>
+          <div class="world-sect-name">{{ sect.name }}</div>
+          <div class="world-sect-loc">📍 {{ sect.location }}</div>
+        </div>
+        {% if cnt > 0 %}<span class="world-mini-badge">{{ cnt }}人</span>{% endif %}
+      </div>
+      <div class="world-mini-desc" style="margin:8px 0">{{ sect.desc }}</div>
+      <div class="world-sect-techs">
+        {% for t in sect.techniques %}
+        <span class="world-tech-tag">{{ t }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endfor %}
+
+{% endblock %}

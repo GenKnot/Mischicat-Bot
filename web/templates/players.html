@@ -24,6 +24,7 @@
   </form>
 
   {% if players %}
+  <div class="table-wrap">
   <table>
     <thead>
       <tr>
@@ -63,6 +64,7 @@
     {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="empty">没有符合条件的修士</p>
   {% endif %}

@@ -4,22 +4,42 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Mischicat Admin{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
-<nav>
-  <a href="/" class="brand">🐱 Mischicat</a>
-  <a href="/" {% if request.url.path == "/" %}class="active"{% endif %}>总览</a>
-  <a href="/players" {% if request.url.path.startswith("/players") %}class="active"{% endif %}>修士</a>
-  <a href="/events" {% if request.url.path == "/events" %}class="active"{% endif %}>公共事件</a>
-  <a href="/items" {% if request.url.path == "/items" %}class="active"{% endif %}>物品图鉴</a>
-  <a href="/techniques" {% if request.url.path == "/techniques" %}class="active"{% endif %}>功法大全</a>
-  <a href="/stats" {% if request.url.path == "/stats" %}class="active"{% endif %}>属性榜</a>
-  <a href="/equipment-preview" {% if request.url.path == "/equipment-preview" %}class="active"{% endif %}>装备预览</a>
-  <a href="/dead" {% if request.url.path == "/dead" %}class="active"{% endif %}>已坐化</a>
-</nav>
-<div class="container">
-  {% block content %}{% endblock %}
+<div class="layout">
+  <button class="nav-toggle" id="navToggle" aria-label="菜单">☰</button>
+  <div class="nav-overlay" id="navOverlay"></div>
+  <nav id="sidebar">
+    <a href="/" class="brand">🐱 Mischicat</a>
+    <a href="/" {% if request.url.path == "/" %}class="active"{% endif %}>总览</a>
+    <a href="/players" {% if request.url.path.startswith("/players") %}class="active"{% endif %}>修士</a>
+    <a href="/events" {% if request.url.path == "/events" %}class="active"{% endif %}>公共事件</a>
+    <a href="/items" {% if request.url.path == "/items" %}class="active"{% endif %}>物品图鉴</a>
+    <a href="/techniques" {% if request.url.path == "/techniques" %}class="active"{% endif %}>功法大全</a>
+    <a href="/stats" {% if request.url.path == "/stats" %}class="active"{% endif %}>属性榜</a>
+    <a href="/equipment-preview" {% if request.url.path == "/equipment-preview" %}class="active"{% endif %}>装备预览</a>
+    <a href="/dead" {% if request.url.path == "/dead" %}class="active"{% endif %}>已坐化</a>
+    <a href="/world" {% if request.url.path == "/world" %}class="active"{% endif %}>世界</a>
+  </nav>
+  <main class="main-content">
+    <div class="container">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
 </div>
+<script>
+  const toggle = document.getElementById('navToggle');
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('navOverlay');
+  toggle.addEventListener('click', () => {
+    sidebar.classList.toggle('open');
+    overlay.classList.toggle('open');
+  });
+  overlay.addEventListener('click', () => {
+    sidebar.classList.remove('open');
+    overlay.classList.remove('open');
+  });
+</script>
 </body>
 </html>

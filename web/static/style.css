@@ -24,39 +24,145 @@ body {
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-nav {
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  padding: 0 24px;
+.layout {
   display: flex;
-  align-items: center;
-  gap: 24px;
-  height: 52px;
+  min-height: 100vh;
 }
 
-nav .brand {
+nav#sidebar {
+  width: 200px;
+  min-width: 200px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 0;
+  gap: 2px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+nav#sidebar .brand {
   font-weight: 700;
   font-size: 16px;
   color: var(--accent);
-  margin-right: 16px;
   text-decoration: none;
+  padding: 8px 20px 16px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
 }
 
-nav a {
+nav#sidebar a {
   color: var(--muted);
   font-size: 13px;
-  padding: 4px 0;
-  border-bottom: 2px solid transparent;
-  transition: color .15s, border-color .15s;
+  padding: 9px 20px;
+  border-left: 3px solid transparent;
+  transition: color .15s, border-color .15s, background .15s;
+  display: block;
 }
 
-nav a:hover, nav a.active {
+nav#sidebar a:hover, nav#sidebar a.active {
   color: var(--text);
-  border-bottom-color: var(--accent);
+  border-left-color: var(--accent);
+  background: rgba(124,106,247,.08);
   text-decoration: none;
+}
+
+.main-content {
+  flex: 1;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.nav-toggle {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 200;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  font-size: 18px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+}
+
+.nav-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.5);
+  z-index: 99;
 }
 
 .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+.card { overflow-x: auto; }
+
+.two-col-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+@media (max-width: 768px) {
+  .nav-toggle {
+    display: flex;
+  }
+
+  nav#sidebar {
+    position: fixed;
+    left: -220px;
+    top: 0;
+    height: 100vh;
+    z-index: 100;
+    transition: left .25s ease;
+    width: 220px;
+    min-width: 220px;
+  }
+
+  nav#sidebar.open {
+    left: 0;
+  }
+
+  .nav-overlay.open {
+    display: block;
+  }
+
+  .main-content {
+    width: 100%;
+  }
+
+  .container {
+    padding: 60px 16px 24px;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .two-col-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  table {
+    min-width: 500px;
+  }
+}
 
 .stats-grid {
   display: grid;
@@ -235,3 +341,165 @@ tr:hover td { background: rgba(124,106,247,.05); }
 .event-status-pending { color: var(--warning); }
 
 .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
+
+.world-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.world-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.world-region-tag {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent);
+  background: rgba(124,106,247,.12);
+  padding: 4px 14px;
+  border-radius: 99px;
+}
+
+.world-align-tag {
+  font-size: 14px;
+  font-weight: 700;
+  padding: 4px 14px;
+  border-radius: 99px;
+}
+.world-align-tag--正道 { background: rgba(34,197,94,.15); color: var(--success); }
+.world-align-tag--邪道 { background: rgba(239,68,68,.15); color: var(--danger); }
+.world-align-tag--隐世 { background: rgba(245,158,11,.15); color: var(--warning); }
+
+.world-section-count {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.world-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.world-card-grid--sect {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.world-mini-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  transition: border-color .15s;
+}
+
+.world-mini-card:hover {
+  border-color: var(--accent);
+}
+
+.world-mini-card--special {
+  border-left: 3px solid var(--accent2);
+}
+
+.world-mini-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  gap: 6px;
+}
+
+.world-mini-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.world-mini-badge {
+  font-size: 11px;
+  background: rgba(124,106,247,.2);
+  color: var(--accent);
+  padding: 2px 7px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+
+.world-mini-desc {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.world-mini-req {
+  font-size: 11px;
+  color: var(--warning);
+  margin-bottom: 5px;
+}
+
+.world-type-tag {
+  font-size: 11px;
+  background: rgba(78,205,196,.15);
+  color: var(--accent2);
+  padding: 2px 7px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+
+.world-sect-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  transition: border-color .15s;
+}
+
+.world-sect-card:hover {
+  border-color: var(--accent);
+}
+
+.world-sect-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.world-sect-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+
+.world-sect-loc {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.world-sect-techs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.world-tech-tag {
+  font-size: 11px;
+  background: rgba(100,116,139,.15);
+  color: var(--muted);
+  padding: 2px 8px;
+  border-radius: 99px;
+}
+
+@media (max-width: 768px) {
+  .world-card-grid,
+  .world-card-grid--sect {
+    grid-template-columns: 1fr;
+  }
+}
+

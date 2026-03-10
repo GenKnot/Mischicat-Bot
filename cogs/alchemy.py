@@ -51,9 +51,9 @@ class AlchemyCog(commands.Cog, name="Alchemy"):
             await ctx.send("你当前品级没有可用丹方。")
             return
 
-        from utils.alchemy import get_known_recipes
-        known_ids = await get_known_recipes(uid)
-        view = AlchemyMainView(ctx.author, player_dict, has_yanhuo, known_ids)
+        from utils.alchemy import get_known_recipes_with_choices
+        known_map = await get_known_recipes_with_choices(uid)
+        view = AlchemyMainView(ctx.author, player_dict, has_yanhuo, set(known_map.keys()), cog=self, known_choices=known_map)
         await ctx.send(
             f"**炼丹台**\n"
             f"炼丹师品级：{player.alchemy_level} 品  |  "
@@ -72,15 +72,10 @@ class AlchemyCog(commands.Cog, name="Alchemy"):
         if player.alchemy_level > 0:
             await ctx.send(f"你已经是 {player.alchemy_level} 品炼丹师了。")
             return
-
-        async with AsyncSessionLocal() as session:
-            p = await session.get(Player, uid)
-            p.alchemy_level = 1
-            await session.commit()
-
         await ctx.send(
-            "你拜入炼丹一道，成为一品炼丹师。\n"
-            "从此可炼制一阶丹药，使用 `cat!炼丹` 开炉。"
+            "炼丹之道需拜师入门，请前往**中州·丹阁**参加入门考核。\n"
+            "需要机缘与神识各达 **3点**，考核费用 **500 灵石**，共有 3 次机会。\n"
+            "考核内容：炼制一枚「聚气丸」（灵芝草×2 + 调和辅药×1）。"
         )
 
     @commands.command(name="炼丹信息")
@@ -196,6 +191,39 @@ class AlchemyCog(commands.Cog, name="Alchemy"):
                 p.alchemy_daily_count = 0
                 await session.commit()
         await ctx.send(f"已将炼丹师品级设为 {level} 品，今日次数重置。")
+
+    @commands.command(name="重置炼丹次数")
+    async def reset_alchemy_count(self, ctx: commands.Context):
+        if str(ctx.author.id) != ADMIN_ID:
+            return
+        uid = str(ctx.author.id)
+        async with AsyncSessionLocal() as session:
+            p = await session.get(Player, uid)
+            if p:
+                p.alchemy_daily_count = 0
+                await session.commit()
+        await ctx.send("今日炼丹次数已重置。")
+
+    @commands.command(name="重置炼丹")
+    async def reset_alchemy(self, ctx: commands.Context, target_id: str = None):
+        if str(ctx.author.id) != ADMIN_ID:
+            return
+        uid = target_id or str(ctx.author.id)
+        from sqlalchemy import delete
+        from utils.db_async import KnownRecipe, AlchemyMastery
+        async with AsyncSessionLocal() as session:
+            p = await session.get(Player, uid)
+            if not p:
+                await ctx.send("找不到该玩家。")
+                return
+            p.alchemy_level = 0
+            p.alchemy_exp = 0
+            p.alchemy_daily_count = 0
+            p.exam_attempts_left = 0
+            await session.execute(delete(KnownRecipe).where(KnownRecipe.discord_id == uid))
+            await session.execute(delete(AlchemyMastery).where(AlchemyMastery.discord_id == uid))
+            await session.commit()
+        await ctx.send(f"已重置 {uid} 的炼丹数据（等级/经验/次数/丹方/熟练度全清）。")
 
 
 async def setup(bot: commands.Bot):

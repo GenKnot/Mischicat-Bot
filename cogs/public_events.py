@@ -20,7 +20,7 @@ from utils.views.public_event_overview import PublicEventOverviewView
 MONTREAL_TZ = ZoneInfo("America/Montreal")
 PUBLIC_EVENT_CHANNEL_ENV = "PUBLIC_EVENT_CHANNEL_ID"
 
-PREVIEW_HOURS = [20, 20, 21, 21, 22]
+PREVIEW_HOURS = [19, 19, 20, 20, 21]
 PREVIEW_MINUTES = [0, 30, 0, 30, 0]
 
 WANBAO_TRIGGER_HOUR = 20
@@ -152,7 +152,7 @@ class PublicEventsCog(commands.Cog, name="PublicEvents"):
             ),
             color=discord.Color.blue(),
         )
-        embed.set_footer(text=f"第 {index + 1}/4 次预告 · 北美东部时间 22:00 正式开始")
+        embed.set_footer(text=f"第 {index + 1}/4 次预告 · 北美东部时间 21:00 正式开始")
 
         view = TravelToEventView(city, pending["event_id"])
         await channel.send(embed=embed, view=view)
@@ -505,7 +505,6 @@ class PublicEventsCog(commands.Cog, name="PublicEvents"):
 
         embed = discord.Embed(
             title="✦ 公共事件 ✦",
-            description="天地异象，机缘降临。以下为当前或即将发生的公共事件：",
             color=discord.Color.blue(),
         )
 
@@ -530,7 +529,7 @@ class PublicEventsCog(commands.Cog, name="PublicEvents"):
         else:
             embed.add_field(
                 name="暂无灵雨事件",
-                value="下次天降灵雨将于今日 22:00（北美东部时间）触发。",
+                value="下次天降灵雨将于今日 21:00（北美东部时间）触发。",
                 inline=False,
             )
 
@@ -546,14 +545,14 @@ class PublicEventsCog(commands.Cog, name="PublicEvents"):
             else:
                 detail = "本次拍卖已结束"
             embed.add_field(
-                name=f"✦ 万宝楼大型拍卖会 · {status_text}",
+                name=f"万宝楼大型拍卖会 · {status_text}",
                 value=f"拍品共 **{len(lots)}** 件　{detail}\n前往 **万宝楼** 参与竞拍",
                 inline=False,
             )
         else:
             embed.add_field(
-                name="✦ 万宝楼大型拍卖会",
-                value=f"今日拍卖会将于北美东部时间 **{WANBAO_TRIGGER_HOUR}:00** 举行，届时前往 **万宝楼** 参与。",
+                name="🟡 万宝楼大型拍卖会 · 今日举行",
+                value=f"北美东部时间 **{WANBAO_TRIGGER_HOUR}:00** 开始，届时前往 **万宝楼** 参与竞拍。",
                 inline=False,
             )
 

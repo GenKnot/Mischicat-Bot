@@ -28,7 +28,7 @@ def _today_trigger_ts() -> float:
     from zoneinfo import ZoneInfo
     from datetime import datetime
     now = datetime.now(ZoneInfo("America/Montreal"))
-    return now.replace(hour=22, minute=0, second=0, microsecond=0).timestamp()
+    return now.replace(hour=21, minute=0, second=0, microsecond=0).timestamp()
 
 
 def _send_main_menu_ephemeral(interaction: discord.Interaction, cog):
@@ -54,7 +54,7 @@ SPIRIT_RAIN_DESC = (
     "· 其余守城者：灵石 + 声望 +10\n"
     "· 临阵脱逃者（领取奖励后离城）：结算时公开点名\n"
     "· 在城内未守城的修士有 30% 概率被妖兽袭击，损失寿元\n\n"
-    "**触发时间**：每日 22:00（北美东部时间），20:00 起每半小时预告"
+    "**触发时间**：每日 21:00（北美东部时间），19:00 起每半小时预告"
 )
 
 
@@ -296,7 +296,7 @@ class _BackToOverviewView(discord.ui.View):
             remaining = max(0, _today_trigger_ts() - time.time())
             embed.add_field(name=f"🟡 {pending['title']} · 即将开始", value=f"城市：**{city}**　约 **{remaining/60:.0f} 分钟**后开始", inline=False)
         else:
-            embed.add_field(name="暂无事件", value="下次天降灵雨将于今日 22:00（北美东部时间）触发。", inline=False)
+            embed.add_field(name="暂无事件", value="下次天降灵雨将于今日 21:00（北美东部时间）触发。", inline=False)
         await interaction.response.defer()
         await interaction.followup.send(embed=embed, view=PublicEventOverviewView(active, pending, auction, self.pe_cog), ephemeral=True)
 

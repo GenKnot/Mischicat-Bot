@@ -2,7 +2,7 @@
 {% block title %}公共事件 · Mischicat{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>公共事件记录（{{ events | length }}）</h2>
+  <h2>公共事件记录（{{ total }}）</h2>
   {% if not events %}
   <p class="empty">暂无事件记录</p>
   {% endif %}
@@ -12,11 +12,17 @@
 <div class="card">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
     <span style="font-size:15px;font-weight:600">{{ e.title }}</span>
-    <span class="badge badge-purple">{{ e.event_type }}</span>
+    <span class="badge badge-purple">
+      {% if e.event_type == "spirit_rain" %}天降灵雨
+      {% elif e.event_type == "wanbao_auction" %}万宝楼拍卖
+      {% else %}{{ e.event_type }}{% endif %}
+    </span>
     {% if e.status == "active" %}
       <span class="badge badge-green">进行中</span>
     {% elif e.status == "ended" %}
       <span class="badge badge-gray">已结束</span>
+    {% elif e.status == "pending" %}
+      <span class="badge badge-yellow">等待开始</span>
     {% else %}
       <span class="badge badge-yellow">{{ e.status }}</span>
     {% endif %}
@@ -30,37 +36,99 @@
     {% endif %}
   </div>
 
-  {% if e.participants %}
-  <table>
-    <thead>
-      <tr><th>道号</th><th>Discord ID</th><th>活动</th><th>贡献</th></tr>
-    </thead>
-    <tbody>
-    {% for p in e.participants %}
-    <tr>
-      <td>
-        {% if p.name %}
-        <a href="/players/{{ p.discord_id }}">{{ p.name }}</a>
-        {% else %}{{ p.discord_id }}{% endif %}
-      </td>
-      <td style="color:var(--muted);font-size:12px">{{ p.discord_id }}</td>
-      <td>
-        {% if p.activity == "defense" %}
-          <span class="badge badge-teal">守城</span>
-        {% elif p.activity == "gather" %}
-          <span class="badge badge-yellow">采集</span>
-        {% else %}
-          <span class="badge badge-gray">{{ p.activity or "—" }}</span>
-        {% endif %}
-      </td>
-      <td>{{ p.contribution }}</td>
-    </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  {% if e.event_source == "wanbao" %}
+    {% if e.lots %}
+    <table>
+      <thead>
+        <tr><th>拍品</th><th>起拍价</th><th>当前出价</th><th>最高出价者</th><th>状态</th></tr>
+      </thead>
+      <tbody>
+      {% for lot in e.lots %}
+      <tr>
+        <td>{{ lot.item_name }}</td>
+        <td style="color:var(--muted)">{{ lot.start_price }} 灵石</td>
+        <td>{{ lot.current_bid or "—" }}</td>
+        <td>
+          {% if lot.bidder_name %}
+            <a href="/players/{{ lot.bidder_id }}">{{ lot.bidder_name }}</a>
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          {% if lot.status == "sold" %}
+            <span class="badge badge-green">已成交</span>
+          {% elif lot.status == "active" %}
+            <span class="badge badge-yellow">竞拍中</span>
+          {% elif lot.status == "unsold" %}
+            <span class="badge badge-gray">流拍</span>
+          {% elif lot.status == "pending" %}
+            <span class="badge badge-gray">待拍</span>
+          {% else %}
+            <span class="badge badge-gray">{{ lot.status }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">暂无拍品</p>
+    {% endif %}
+
   {% else %}
-  <p class="empty">无参与者</p>
+    {% if e.participants %}
+    <table>
+      <thead>
+        <tr><th>道号</th><th>Discord ID</th><th>活动</th><th>贡献</th></tr>
+      </thead>
+      <tbody>
+      {% for p in e.participants %}
+      <tr>
+        <td>
+          {% if p.name %}
+          <a href="/players/{{ p.discord_id }}">{{ p.name }}</a>
+          {% else %}{{ p.discord_id }}{% endif %}
+        </td>
+        <td style="color:var(--muted);font-size:12px">{{ p.discord_id }}</td>
+        <td>
+          {% for act in p.activities %}
+            {% if act == "defense" %}
+              <span class="badge badge-teal">守城</span>
+            {% elif act == "gather" %}
+              <span class="badge badge-yellow">采集</span>
+            {% elif act == "crystal" %}
+              <span class="badge badge-purple">采集灵晶</span>
+            {% elif act == "temper" %}
+              <span class="badge badge-green">淬体</span>
+            {% elif act == "enlighten" %}
+              <span class="badge badge-teal">感悟</span>
+            {% elif act == "cultivate" %}
+              <span class="badge badge-teal">修炼</span>
+            {% else %}
+              <span class="badge badge-gray">{{ act }}</span>
+            {% endif %}
+          {% endfor %}
+        </td>
+        <td>{{ p.contribution }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">无参与者</p>
+    {% endif %}
   {% endif %}
 </div>
 {% endfor %}
+
+{% if total_pages is defined and total_pages > 1 %}
+<div style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:24px">
+  {% if page > 1 %}
+  <a href="/events?page={{ page - 1 }}" style="padding:6px 16px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);text-decoration:none">← 上一页</a>
+  {% endif %}
+  <span style="color:var(--muted);font-size:13px">第 {{ page }} / {{ total_pages }} 页</span>
+  {% if page < total_pages %}
+  <a href="/events?page={{ page + 1 }}" style="padding:6px 16px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);text-decoration:none">下一页 →</a>
+  {% endif %}
+</div>
+{% endif %}
 {% endblock %}

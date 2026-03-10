@@ -181,6 +181,12 @@ def _migrate(conn):
             PRIMARY KEY (discord_id, recipe_id)
         )
     """)
+    existing_kr = {row[1] for row in conn.execute("PRAGMA table_info(known_recipes)")}
+    if "aux_choices" not in existing_kr:
+        conn.execute("ALTER TABLE known_recipes ADD COLUMN aux_choices TEXT DEFAULT '[]'")
+    existing_p = {row[1] for row in conn.execute("PRAGMA table_info(players)")}
+    if "exam_attempts_left" not in existing_p:
+        conn.execute("ALTER TABLE players ADD COLUMN exam_attempts_left INTEGER NOT NULL DEFAULT 0")
     conn.commit()
 
 

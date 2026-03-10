@@ -151,7 +151,23 @@ class CityRegionButton(discord.ui.Button):
         embed = discord.Embed(title=f"✦ {self.region} ✦", color=discord.Color.blue())
         for c in cities:
             embed.add_field(name=c["name"], value=c["desc"], inline=False)
-        await interaction.response.edit_message(embed=embed, view=self.view)
+        view = CityListView(self.view.author, self.view.cog, cities)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class CityListView(discord.ui.View):
+    def __init__(self, author, cog=None, cities: list = None):
+        super().__init__(timeout=120)
+        self.author = author
+        self.cog = cog
+        self.add_item(_BackToWorldButton(row=1))
+        self.add_item(_BackToMenuButton(row=1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message("这不是你的面板。", ephemeral=True)
+            return False
+        return True
 
 
 class _BackToWorldButton(discord.ui.Button):

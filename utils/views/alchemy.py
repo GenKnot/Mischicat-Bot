@@ -3,7 +3,7 @@ from utils.alchemy import (
     PILLS, RECIPES, QUALITY_NAMES, NO_YANHUO_CAP,
     list_available_recipes, get_recipes_for_pill, get_recipe_by_id,
     get_mastery_count, get_mastery_label, calc_success_rate,
-    get_known_recipes,
+    get_known_recipes, get_known_recipes_with_choices,
 )
 from utils.db_async import AsyncSessionLocal, Inventory
 
@@ -28,9 +28,10 @@ def _quality_cap_label(cap: int, has_yanhuo: bool) -> str:
 
 
 def _match_recipe(main_items: list[str], aux_choices: dict[int, str]) -> dict | None:
+    selected_kinds = set(main_items)
     for r in RECIPES:
-        r_mains = sorted(i["item"] for i in r["main_ingredients"])
-        if sorted(main_items) != r_mains:
+        r_kinds = set(ing["item"] for ing in r["main_ingredients"])
+        if r_kinds != selected_kinds:
             continue
         if len(aux_choices) != len(r["aux_groups"]):
             continue
@@ -46,13 +47,47 @@ def _match_recipe(main_items: list[str], aux_choices: dict[int, str]) -> dict | 
     return None
 
 
+def _auto_match_recipe(qty_map: dict[str, int], alchemy_level: int) -> tuple[dict | None, list[int]]:
+    for r in RECIPES:
+        if r["alchemy_level_req"] > alchemy_level:
+            continue
+        main_ok = all(
+            qty_map.get(ing["item"], 0) >= ing["qty"]
+            for ing in r["main_ingredients"]
+        )
+        if not main_ok:
+            continue
+        remaining: dict[str, int] = dict(qty_map)
+        for ing in r["main_ingredients"]:
+            remaining[ing["item"]] = remaining.get(ing["item"], 0) - ing["qty"]
+        aux_choices: list[int] = []
+        aux_ok = True
+        for group in r["aux_groups"]:
+            matched_idx = None
+            for j, opt in enumerate(group["options"]):
+                if remaining.get(opt["item"], 0) >= opt["qty"]:
+                    matched_idx = j
+                    break
+            if matched_idx is None:
+                aux_ok = False
+                break
+            opt = group["options"][matched_idx]
+            remaining[opt["item"]] = remaining.get(opt["item"], 0) - opt["qty"]
+            aux_choices.append(matched_idx)
+        if aux_ok:
+            return r, aux_choices
+    return None, []
+
+
 class AlchemyMainView(discord.ui.View):
-    def __init__(self, author: discord.User, player: dict, has_yanhuo: bool, known_ids: set[str]):
+    def __init__(self, author: discord.User, player: dict, has_yanhuo: bool, known_ids: set[str], cog=None, known_choices: dict = None):
         super().__init__(timeout=120)
         self.author = author
         self.player = player
         self.has_yanhuo = has_yanhuo
         self.known_ids = known_ids
+        self.known_choices = known_choices or {}
+        self.cog = cog
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user != self.author:
@@ -73,30 +108,40 @@ class AlchemyMainView(discord.ui.View):
         if not known:
             await interaction.response.send_message("没有符合当前品级的已知丹方。", ephemeral=True)
             return
-        view = _KnownRecipeSelectView(self.author, self.player, self.has_yanhuo, known)
+        view = _KnownRecipeSelectView(self.author, self.player, self.has_yanhuo, known, self.known_choices, cog=self.cog)
         await interaction.response.edit_message(content="选择已知丹方：", embed=None, view=view)
 
     @discord.ui.button(label="自由配药", style=discord.ButtonStyle.secondary, emoji="🔬")
     async def free_mix_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         inventory = await _get_inventory(str(interaction.user.id))
-        view = _FreeMixMainIngView(self.author, self.player, self.has_yanhuo, inventory)
+        view = _FreeMixSelectView(self.author, self.player, self.has_yanhuo, inventory, cog=self.cog)
         await interaction.response.edit_message(
-            content="自由配药 — 选择主药（可多选，按确认）：",
+            content="自由配药 — 选择要投入的药材（1-5种）：",
             embed=None,
             view=view,
         )
 
+    @discord.ui.button(label="返回技艺", style=discord.ButtonStyle.secondary, emoji="↩️", row=1)
+    async def back_crafting_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from utils.views.crafting import CraftingMenuView, _crafting_overview_embed
+        await interaction.response.edit_message(
+            content=None,
+            embed=_crafting_overview_embed(),
+            view=CraftingMenuView(self.author, self.cog),
+        )
+
 
 class _KnownRecipeSelectView(discord.ui.View):
-    def __init__(self, author, player, has_yanhuo, known_recipes):
+    def __init__(self, author, player, has_yanhuo, known_recipes, known_choices: dict, cog=None):
         super().__init__(timeout=120)
         self.author = author
         self.player = player
         self.has_yanhuo = has_yanhuo
+        self.known_choices = known_choices
+        self.cog = cog
         options = [
             discord.SelectOption(
                 label=r["name"],
-                description=f"成功率 {r['base_success_rate']}%  上限 {_quality_cap_label(r['max_quality'], has_yanhuo)}",
                 value=r["recipe_id"],
             )
             for r in known_recipes[:25]
@@ -118,12 +163,37 @@ class _KnownRecipeSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         recipe = get_recipe_by_id(self.values[0])
         inventory = await _get_inventory(str(interaction.user.id))
-        view = _AuxSelectView(self.view.author, self.view.player, self.view.has_yanhuo, recipe, inventory, [])
-        embed = _recipe_embed(recipe, self.view.player, inventory, self.view.has_yanhuo)
-        await interaction.response.edit_message(content=None, embed=embed, view=view)
+        saved_choices = self.view.known_choices.get(recipe["recipe_id"], [])
+        if len(saved_choices) < len(recipe["aux_groups"]):
+            saved_choices = list(saved_choices) + [0] * (len(recipe["aux_groups"]) - len(saved_choices))
+        missing = []
+        for ing in recipe["main_ingredients"]:
+            if inventory.get(ing["item"], 0) < ing["qty"]:
+                missing.append(f"{ing['item']} ×{ing['qty']}")
+        for i, group in enumerate(recipe["aux_groups"]):
+            opt = group["options"][saved_choices[i]]
+            if inventory.get(opt["item"], 0) < opt["qty"]:
+                missing.append(f"{opt['item']} ×{opt['qty']}")
+        if missing:
+            await interaction.response.send_message(
+                f"材料不足，无法开炉：{'、'.join(missing)}", ephemeral=True
+            )
+            return
+        confirm_view = _ConfirmView(self.view.author, self.view.player, self.view.has_yanhuo, recipe, inventory, saved_choices, cog=getattr(self.view, "cog", None))
+        consumed_lines = []
+        for ing in recipe["main_ingredients"]:
+            consumed_lines.append(f"· {ing['item']} ×{ing['qty']}")
+        for i, group in enumerate(recipe["aux_groups"]):
+            opt = group["options"][saved_choices[i]]
+            consumed_lines.append(f"· {opt['item']} ×{opt['qty']}")
+        await interaction.response.edit_message(
+            content=f"即将炼制「{recipe['pill']}」，确认开炉？\n\n消耗材料：\n" + "\n".join(consumed_lines),
+            embed=None,
+            view=confirm_view,
+        )
 
 
-def _all_herb_names(alchemy_level: int) -> list[str]:
+def _all_herb_names_owned(inventory: dict, alchemy_level: int) -> list[str]:
     seen = set()
     result = []
     for r in RECIPES:
@@ -138,26 +208,33 @@ def _all_herb_names(alchemy_level: int) -> list[str]:
                 if o["item"] not in seen:
                     seen.add(o["item"])
                     result.append(o["item"])
-    return sorted(result)
+    return sorted(h for h in result if inventory.get(h, 0) > 0)
 
 
-class _FreeMixMainIngView(discord.ui.View):
-    def __init__(self, author, player, has_yanhuo, inventory):
+def _qty_content(qty_map: dict, inventory: dict) -> str:
+    lines = ["**已选药材（点 +1 调整用量）：**"]
+    for item, qty in qty_map.items():
+        have = inventory.get(item, 0)
+        lines.append(f"· {item} ×{qty}　（持有 {have}）")
+    return "\n".join(lines)
+
+
+class _FreeMixSelectView(discord.ui.View):
+    def __init__(self, author, player, has_yanhuo, inventory, cog=None):
         super().__init__(timeout=120)
         self.author = author
         self.player = player
         self.has_yanhuo = has_yanhuo
         self.inventory = inventory
-        self.selected_mains: list[str] = []
+        self.cog = cog
 
-        herbs = _all_herb_names(player.get("alchemy_level", 1))
-        owned = [h for h in herbs if inventory.get(h, 0) > 0]
+        herbs = _all_herb_names_owned(inventory, player.get("alchemy_level", 0))
         options = [
-            discord.SelectOption(label=h, description=f"持有 {inventory.get(h,0)}", value=h)
-            for h in owned[:25]
+            discord.SelectOption(label=h, description=f"持有 {inventory.get(h, 0)}", value=h)
+            for h in herbs[:25]
         ]
         if options:
-            self.add_item(_MainIngSelect(options))
+            self.add_item(_FreeMixHerbSelect(options))
         self.add_item(_BackToMainButton())
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -167,65 +244,41 @@ class _FreeMixMainIngView(discord.ui.View):
         return True
 
 
-class _MainIngSelect(discord.ui.Select):
+class _FreeMixHerbSelect(discord.ui.Select):
     def __init__(self, options):
         super().__init__(
-            placeholder="选择主药（可多选）…",
+            placeholder="选择要投入的药材（1-5种）…",
             options=options,
             min_values=1,
-            max_values=min(2, len(options)),
+            max_values=min(5, len(options)),
         )
 
     async def callback(self, interaction: discord.Interaction):
         v = self.view
-        v.selected_mains = list(self.values)
-        candidates = [
-            r for r in RECIPES
-            if r["alchemy_level_req"] <= v.player.get("alchemy_level", 1)
-            and sorted(i["item"] for i in r["main_ingredients"]) == sorted(v.selected_mains)
-        ]
-        if not candidates:
-            await interaction.response.send_message(
-                f"以「{'、'.join(v.selected_mains)}」为主药，暂时没有匹配的丹方。\n换个组合试试？",
-                ephemeral=True,
-            )
-            return
-        first = candidates[0]
-        view = _FreeAuxSelectView(v.author, v.player, v.has_yanhuo, first, v.inventory, [], v.selected_mains)
+        qty_map = {item: 1 for item in self.values}
+        view = _FreeMixQtyView(v.author, v.player, v.has_yanhuo, v.inventory, qty_map, cog=getattr(v, "cog", None))
         await interaction.response.edit_message(
-            content=f"主药：{'、'.join(v.selected_mains)}\n选择辅药组 1：{first['aux_groups'][0]['desc']}",
+            content=_qty_content(qty_map, v.inventory),
             embed=None,
             view=view,
         )
 
 
-class _FreeAuxSelectView(discord.ui.View):
-    def __init__(self, author, player, has_yanhuo, recipe, inventory, choices_so_far, main_items):
+class _FreeMixQtyView(discord.ui.View):
+    def __init__(self, author, player, has_yanhuo, inventory, qty_map: dict, cog=None):
         super().__init__(timeout=120)
         self.author = author
         self.player = player
         self.has_yanhuo = has_yanhuo
-        self.recipe = recipe
         self.inventory = inventory
-        self.choices_so_far = choices_so_far
-        self.main_items = main_items
+        self.qty_map = dict(qty_map)
+        self.cog = cog
+        self._firing = False
 
-        group_idx = len(choices_so_far)
-        if group_idx < len(recipe["aux_groups"]):
-            group = recipe["aux_groups"][group_idx]
-            owned_options = [
-                discord.SelectOption(
-                    label=f"{opt['item']} ×{opt['qty']}",
-                    description=f"持有 {inventory.get(opt['item'], 0)}",
-                    value=opt["item"],
-                )
-                for opt in group["options"]
-            ]
-            all_options = owned_options + [
-                discord.SelectOption(label="其他草药（自行尝试）", value="__other__")
-            ]
-            self.add_item(_FreeAuxSelect(group["desc"], all_options[:25], group_idx))
-        self.add_item(_BackToMainButton())
+        for i, item in enumerate(qty_map):
+            self.add_item(_PlusOneButton(item, row=i % 4))
+        self.add_item(_ConfirmFreeMixButton(row=4))
+        self.add_item(_BackToMainButton(row=4))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user != self.author:
@@ -234,65 +287,153 @@ class _FreeAuxSelectView(discord.ui.View):
         return True
 
 
-class _FreeAuxSelect(discord.ui.Select):
-    def __init__(self, desc, options, group_idx):
-        super().__init__(placeholder=f"辅药组 {group_idx+1}：{desc}", options=options)
-        self.group_idx = group_idx
+class _PlusOneButton(discord.ui.Button):
+    def __init__(self, item: str, row: int):
+        super().__init__(label=f"{item} +1", style=discord.ButtonStyle.secondary, row=row)
+        self.item = item
 
     async def callback(self, interaction: discord.Interaction):
         v = self.view
-        chosen_item = self.values[0]
-        if chosen_item == "__other__":
+        have = v.inventory.get(self.item, 0)
+        current = v.qty_map.get(self.item, 1)
+        if current >= have:
             await interaction.response.send_message(
-                "选择了未知辅药，炼丹将继续但可能无法匹配任何丹方，结果未知。",
-                ephemeral=True,
+                f"「{self.item}」持有 {have} 个，已达上限。", ephemeral=True
             )
-            chosen_item = "__unknown__"
+            return
+        v.qty_map[self.item] = current + 1
+        await interaction.response.edit_message(
+            content=_qty_content(v.qty_map, v.inventory),
+            view=v,
+        )
 
-        new_choices_items = v.choices_so_far + [chosen_item]
-        total_groups = len(v.recipe["aux_groups"])
 
-        if len(new_choices_items) < total_groups:
-            next_group = v.recipe["aux_groups"][len(new_choices_items)]
-            next_view = _FreeAuxSelectView(
-                v.author, v.player, v.has_yanhuo, v.recipe, v.inventory, new_choices_items, v.main_items
-            )
-            await interaction.response.edit_message(
-                content=f"主药：{'、'.join(v.main_items)}\n选择辅药组 {len(new_choices_items)+1}：{next_group['desc']}",
-                view=next_view,
-            )
-        else:
-            aux_dict = {i: item for i, item in enumerate(new_choices_items)}
-            matched = _match_recipe(v.main_items, aux_dict)
-            if not matched:
-                await interaction.response.edit_message(
-                    content=(
-                        "这个配方没有匹配到任何已知丹方。\n"
-                        "材料已消耗，炉中只剩一堆灰烬。继续摸索吧！"
-                    ),
+class _ConfirmFreeMixButton(discord.ui.Button):
+    def __init__(self, row: int):
+        super().__init__(label="投入丹炉", style=discord.ButtonStyle.primary, row=row)
+
+    async def callback(self, interaction: discord.Interaction):
+        v = self.view
+        if v._firing:
+            await interaction.response.send_message("丹炉运转中，请稍候…", ephemeral=True)
+            return
+        v._firing = True
+        try:
+            await interaction.response.defer()
+            uid = str(interaction.user.id)
+            recipe, aux_choices = _auto_match_recipe(v.qty_map, v.player.get("alchemy_level", 0))
+
+            all_items = []
+            for item, qty in v.qty_map.items():
+                all_items.extend([item] * qty)
+
+            if recipe is None:
+                await _consume_free_mix(uid, all_items, v.inventory)
+                await interaction.edit_original_response(
+                    content="丹炉轰鸣，烟雾散尽，炉中只剩一堆灰烬。\n继续摸索吧！",
                     embed=None,
-                    view=None,
+                    view=_AshView(v.author, v.player, v.has_yanhuo, v.inventory, cog=getattr(v, "cog", None)),
                 )
-                await _consume_free_mix(str(interaction.user.id), v.main_items, new_choices_items, v.inventory)
                 return
 
-            choices_idx = []
-            for gi, group in enumerate(matched["aux_groups"]):
-                chosen = new_choices_items[gi]
-                for j, opt in enumerate(group["options"]):
-                    if opt["item"] == chosen:
-                        choices_idx.append(j)
-                        break
-                else:
-                    choices_idx.append(0)
-
-            confirm_view = _ConfirmView(v.author, v.player, v.has_yanhuo, matched, v.inventory, choices_idx)
-            embed = await _confirm_embed(matched, v.player, v.inventory, choices_idx, v.has_yanhuo)
-            await interaction.response.edit_message(
-                content="配方命中！确认开炉：",
-                embed=embed,
-                view=confirm_view,
+            from utils.alchemy import attempt_alchemy
+            result = await attempt_alchemy(
+                discord_id=uid,
+                recipe=recipe,
+                player_soul=v.player.get("soul", 5),
+                alchemy_level=v.player.get("alchemy_level", 0),
+                aux_choices=aux_choices,
+                inventory=v.inventory,
+                has_yanhuo=v.has_yanhuo,
+                free_mix=True,
             )
+            if not result["ok"] and "reason" in result:
+                await interaction.edit_original_response(content=result["reason"], embed=None, view=None)
+                return
+
+            await _consume_ingredients(uid, recipe, aux_choices)
+
+            if result["success"]:
+                await _give_pill(uid, result["pill"], result["quality_name"])
+            elif result.get("lifespan_loss", 0) > 0:
+                async with AsyncSessionLocal() as session:
+                    from utils.db_async import Player as _Player
+                    p = await session.get(_Player, uid)
+                    if p:
+                        p.lifespan = max(0, p.lifespan - result["lifespan_loss"])
+                        if p.lifespan <= 0:
+                            p.is_dead = True
+                        await session.commit()
+
+            embed = _result_embed(result, recipe, v.inventory)
+            fail_view = None if result["success"] else _FailView(v.author, v.player, v.has_yanhuo, cog=getattr(v, "cog", None))
+            await interaction.edit_original_response(embed=embed, view=fail_view)
+            print(f"[alchemy error] {e}")
+            import traceback; traceback.print_exc()
+            try:
+                await interaction.edit_original_response(content=f"炼丹出错：{e}", embed=None, view=None)
+            except Exception:
+                pass
+        finally:
+            v._firing = False
+
+
+class _AshView(discord.ui.View):
+    def __init__(self, author, player, has_yanhuo, inventory, cog=None):
+        super().__init__(timeout=120)
+        self.author = author
+        self.player = player
+        self.has_yanhuo = has_yanhuo
+        self.inventory = inventory
+        self.cog = cog
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message("这不是你的面板。", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="继续炼丹", style=discord.ButtonStyle.primary)
+    async def continue_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        inv = await _get_inventory(str(interaction.user.id))
+        view = _FreeMixSelectView(self.author, self.player, self.has_yanhuo, inv, cog=self.cog)
+        await interaction.response.edit_message(
+            content="自由配药 — 选择要投入的药材（1-5种）：",
+            embed=None,
+            view=view,
+        )
+
+    @discord.ui.button(label="返回炼丹台", style=discord.ButtonStyle.secondary)
+    async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        known_map = await get_known_recipes_with_choices(str(interaction.user.id))
+        view = AlchemyMainView(self.author, self.player, self.has_yanhuo, set(known_map.keys()), cog=self.cog, known_choices=known_map)
+        await interaction.response.edit_message(content="炼丹台：", embed=None, view=view)
+
+
+class _FailView(discord.ui.View):
+    def __init__(self, author, player, has_yanhuo, cog=None):
+        super().__init__(timeout=120)
+        self.author = author
+        self.player = player
+        self.has_yanhuo = has_yanhuo
+        self.cog = cog
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message("这不是你的面板。", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="继续炼丹", style=discord.ButtonStyle.primary)
+    async def continue_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        known_map = await get_known_recipes_with_choices(str(interaction.user.id))
+        view = AlchemyMainView(self.author, self.player, self.has_yanhuo, set(known_map.keys()), cog=self.cog, known_choices=known_map)
+        await interaction.response.edit_message(content="炼丹台：", embed=None, view=view)
+
+    @discord.ui.button(label="返回技艺", style=discord.ButtonStyle.secondary)
+    async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from utils.views.crafting import CraftingMenuView, _crafting_overview_embed
+        await interaction.response.edit_message(content=None, embed=_crafting_overview_embed(), view=CraftingMenuView(self.author, self.cog))
 
 
 class _AuxSelectView(discord.ui.View):
@@ -345,7 +486,7 @@ class _AuxSelect(discord.ui.Select):
 
 
 class _ConfirmView(discord.ui.View):
-    def __init__(self, author, player, has_yanhuo, recipe, inventory, choices):
+    def __init__(self, author, player, has_yanhuo, recipe, inventory, choices, cog=None):
         super().__init__(timeout=60)
         self.author = author
         self.player = player
@@ -353,6 +494,7 @@ class _ConfirmView(discord.ui.View):
         self.recipe = recipe
         self.inventory = inventory
         self.choices = choices
+        self.cog = cog
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user != self.author:
@@ -393,8 +535,9 @@ class _ConfirmView(discord.ui.View):
                         p.is_dead = True
                     await session.commit()
 
-        embed = _result_embed(result, self.recipe)
-        await interaction.edit_original_response(embed=embed, view=None)
+        embed = _result_embed(result, self.recipe, self.inventory)
+        fail_view = None if result["success"] else _FailView(self.author, self.player, self.has_yanhuo, cog=getattr(self, "cog", None))
+        await interaction.edit_original_response(embed=embed, view=fail_view)
         self.stop()
 
     @discord.ui.button(label="取消", style=discord.ButtonStyle.secondary)
@@ -404,14 +547,14 @@ class _ConfirmView(discord.ui.View):
 
 
 class _BackToMainButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="返回", style=discord.ButtonStyle.secondary)
+    def __init__(self, row: int | None = None):
+        super().__init__(label="返回炼丹台", style=discord.ButtonStyle.secondary, row=row)
 
     async def callback(self, interaction: discord.Interaction):
         v = self.view
         uid = str(interaction.user.id)
-        known_ids = await get_known_recipes(uid)
-        view = AlchemyMainView(v.author, v.player, v.has_yanhuo, known_ids)
+        known_map = await get_known_recipes_with_choices(uid)
+        view = AlchemyMainView(v.author, v.player, v.has_yanhuo, set(known_map.keys()), cog=getattr(v, "cog", None), known_choices=known_map)
         await interaction.response.edit_message(content="炼丹台：", embed=None, view=view)
 
 
@@ -466,7 +609,16 @@ async def _confirm_embed(recipe, player, inventory, choices, has_yanhuo) -> disc
     return embed
 
 
-def _result_embed(result: dict, recipe: dict) -> discord.Embed:
+def _result_embed(result: dict, recipe: dict, inventory: dict = None) -> discord.Embed:
+    consumed = result.get("consumed", {})
+    consumed_lines = []
+    for item, qty in consumed.items():
+        remaining = (inventory.get(item, 0) - qty) if inventory else None
+        line = f"{item} ×{qty}"
+        if remaining is not None:
+            line += f"（剩余 {max(0, remaining)}）"
+        consumed_lines.append(line)
+    consumed_str = "\n".join(consumed_lines)
     if not result["success"]:
         consequence = result.get("consequence", "普通失败")
         lifespan_loss = result.get("lifespan_loss", 0)
@@ -474,8 +626,9 @@ def _result_embed(result: dict, recipe: dict) -> discord.Embed:
         if lifespan_loss:
             desc += f"\n寿元损失 {lifespan_loss} 年。"
         embed = discord.Embed(title=f"炼丹失败 — {consequence}", description=desc, color=0x8B0000)
-        embed.add_field(name="成功率", value=f"{result['success_rate']}%", inline=True)
         embed.add_field(name="今日剩余次数", value=f"{6 - result['daily_count']}/6", inline=True)
+        if consumed_str:
+            embed.add_field(name="消耗材料", value=consumed_str, inline=False)
         return embed
     quality = result["quality_name"]
     pill = result["pill"]
@@ -487,9 +640,10 @@ def _result_embed(result: dict, recipe: dict) -> discord.Embed:
         color=color,
     )
     embed.add_field(name="品质", value=quality, inline=True)
-    embed.add_field(name="成功率", value=f"{result['success_rate']}%", inline=True)
     embed.add_field(name="今日剩余次数", value=f"{6 - result['daily_count']}/6", inline=True)
     embed.add_field(name="熟练度", value=f"{result['mastery_label']}（{result['mastery_count']}次）", inline=True)
+    if consumed_str:
+        embed.add_field(name="消耗材料", value=consumed_str, inline=False)
     if result.get("leveled_up"):
         embed.add_field(name="品级提升", value=f"恭喜晋升为 {result['alchemy_level']} 品炼丹师！", inline=False)
     return embed
@@ -512,14 +666,11 @@ async def _consume_ingredients(discord_id: str, recipe: dict, choices: list[int]
         await session.commit()
 
 
-async def _consume_free_mix(discord_id: str, main_items: list[str], aux_items: list[str], inventory: dict):
+async def _consume_free_mix(discord_id: str, all_items: list[str], inventory: dict):
     async with AsyncSessionLocal() as session:
         to_consume: dict[str, int] = {}
-        for item in main_items:
+        for item in all_items:
             to_consume[item] = to_consume.get(item, 0) + 1
-        for item in aux_items:
-            if item not in ("__unknown__", "__other__"):
-                to_consume[item] = to_consume.get(item, 0) + 1
         for item_id, qty in to_consume.items():
             row = await session.get(Inventory, (discord_id, item_id))
             if row:

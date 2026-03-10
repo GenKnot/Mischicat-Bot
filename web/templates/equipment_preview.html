@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}装备预览 · Mischicat{% endblock %}
+{% block content %}
+<style>
+.btn-group { display:flex;flex-wrap:wrap;gap:6px;margin-top:6px }
+.btn-opt {
+  padding:5px 14px;border:1px solid var(--border);border-radius:20px;
+  background:var(--bg);color:var(--text);cursor:pointer;font-size:13px;
+  transition:all .15s;user-select:none;
+}
+.btn-opt:hover { border-color:var(--accent);color:var(--accent) }
+.btn-opt.active { background:var(--accent);border-color:var(--accent);color:#fff }
+.btn-opt.q-普通.active  { background:#888;border-color:#888 }
+.btn-opt.q-精良.active  { background:#2ecc71;border-color:#2ecc71 }
+.btn-opt.q-稀有.active  { background:#3498db;border-color:#3498db }
+.btn-opt.q-史诗.active  { background:#9b59b6;border-color:#9b59b6 }
+.btn-opt.q-传说.active  { background:#d4ac0d;border-color:#d4ac0d;color:#000 }
+.section-label { font-size:12px;color:var(--muted);margin-bottom:2px;margin-top:14px }
+</style>
+
+<div class="card">
+  <h2>装备预览</h2>
+  <p style="color:var(--muted);font-size:13px">选好参数点 Roll，纯展示不记录。</p>
+
+  <form method="get" action="/equipment-preview" id="rollForm">
+    <input type="hidden" name="slot"    id="val_slot"    value="{{ slot }}">
+    <input type="hidden" name="quality" id="val_quality" value="{{ quality }}">
+    <input type="hidden" name="tier"    id="val_tier"    value="{{ tier }}">
+    <input type="hidden" name="count"   id="val_count"   value="{{ count }}">
+
+    <div class="section-label">部位</div>
+    <div class="btn-group">
+      <div class="btn-opt {% if slot == '' %}active{% endif %}" data-group="slot" data-val="">随机</div>
+      {% for s in slots %}
+      <div class="btn-opt {% if slot == s %}active{% endif %}" data-group="slot" data-val="{{ s }}">{{ s }}</div>
+      {% endfor %}
+    </div>
+
+    <div class="section-label">品质</div>
+    <div class="btn-group">
+      <div class="btn-opt {% if quality == '' %}active{% endif %}" data-group="quality" data-val="">随机</div>
+      {% for q in qualities %}
+      <div class="btn-opt q-{{ q }} {% if quality == q %}active{% endif %}" data-group="quality" data-val="{{ q }}">{{ q }}</div>
+      {% endfor %}
+    </div>
+
+    <div class="section-label">境界</div>
+    <div class="btn-group">
+      {% for t in tiers %}
+      <div class="btn-opt {% if tier == t.val %}active{% endif %}" data-group="tier" data-val="{{ t.val }}">{{ t.label }}</div>
+      {% endfor %}
+    </div>
+
+    <div class="section-label">数量</div>
+    <div class="btn-group">
+      {% for n in [1,3,5,10] %}
+      <div class="btn-opt {% if count == n %}active{% endif %}" data-group="count" data-val="{{ n }}">{{ n }} 件</div>
+      {% endfor %}
+    </div>
+
+    <button type="submit" style="margin-top:20px;padding:8px 32px;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:15px">🎲 Roll</button>
+  </form>
+</div>
+
+{% if results %}
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-top:8px">
+{% for eq in results %}
+<div class="card" style="border-left:3px solid {{ eq.color }}">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+    <span style="font-weight:600;font-size:15px">{{ eq.name }}</span>
+    <span class="badge" style="background:{{ eq.badge_bg }};color:{% if eq.quality == '传说' %}#000{% else %}#fff{% endif %}">{{ eq.quality }}</span>
+  </div>
+  <div style="color:var(--muted);font-size:12px;margin-bottom:10px">
+    {{ eq.slot }} · {{ eq.tier_label }}
+  </div>
+  <table style="width:100%;font-size:13px">
+    {% for stat, val in eq.stats.items() %}
+    <tr>
+      <td style="color:var(--muted)">{{ stat_names.get(stat, stat) }}</td>
+      <td style="text-align:right;color:var(--accent)">+{{ val }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <div style="margin-top:10px;font-size:12px;color:var(--muted);font-style:italic">{{ eq.flavor }}</div>
+</div>
+{% endfor %}
+</div>
+{% endif %}
+
+<script>
+document.querySelectorAll('.btn-opt').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const group = btn.dataset.group;
+    document.querySelectorAll(`.btn-opt[data-group="${group}"]`).forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('val_' + group).value = btn.dataset.val;
+  });
+});
+</script>
+{% endblock %}

@@ -14,6 +14,10 @@ QUALITY_NAMES = ["常规", "一纹", "二纹", "三纹", "四纹", "五纹", "�
 DAILY_LIMIT = 6
 NO_YANHUO_CAP = 8
 
+QUALITY_MULTIPLIERS = [1.0, 1.1, 1.2, 1.35, 1.5, 2.0, 2.5, 3.2, 4.2, 5.5, 7.5, 12.0]
+
+ALCHEMY_EXP_THRESHOLDS = [0, 0, 50, 150, 300, 500, 800, 1200, 1800, 2500]
+
 MASTERY_STAGES = [
     (0, 0),
     (10, 1),
@@ -22,7 +26,6 @@ MASTERY_STAGES = [
 ]
 
 ALCHEMY_EXP_PER_CRAFT = 10
-ALCHEMY_EXP_THRESHOLDS = [0, 100, 250, 500, 900, 1400, 2100, 3000, 4200, 6000]
 
 
 def _load_pills() -> dict:
@@ -89,11 +92,13 @@ def calc_quality(recipe: dict, player_soul: int, alchemy_level: int, aux_quality
     return result
 
 
-def calc_success_rate(recipe: dict, alchemy_level: int, mastery_count: int) -> int:
+def calc_success_rate(recipe: dict, alchemy_level: int, mastery_count: int, free_mix: bool = False) -> int:
     _, is_master = get_mastery_bonus(mastery_count)
     rate = recipe["base_success_rate"]
     if is_master:
-        rate += 10
+        rate += 15
+    if free_mix:
+        rate = int(rate * 0.7)
     rate = min(95, max(5, rate))
     return rate
 
@@ -130,11 +135,27 @@ async def get_known_recipes(discord_id: str) -> set[str]:
         return {row.recipe_id for row in rows.scalars()}
 
 
-async def unlock_recipe(discord_id: str, recipe_id: str):
-    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+async def get_known_recipes_with_choices(discord_id: str) -> dict[str, list[int]]:
+    async with AsyncSessionLocal() as session:
+        rows = await session.execute(
+            select(KnownRecipe).where(KnownRecipe.discord_id == discord_id)
+        )
+        result = {}
+        for row in rows.scalars():
+            try:
+                import json as _json
+                result[row.recipe_id] = _json.loads(row.aux_choices or "[]")
+            except Exception:
+                result[row.recipe_id] = []
+        return result
+
+
+async def unlock_recipe(discord_id: str, recipe_id: str, aux_choices: list[int] = None):
+    import json as _json
+    choices_str = _json.dumps(aux_choices or [])
     async with AsyncSessionLocal() as session:
         stmt = sqlite_insert(KnownRecipe).values(
-            discord_id=discord_id, recipe_id=recipe_id
+            discord_id=discord_id, recipe_id=recipe_id, aux_choices=choices_str
         ).on_conflict_do_nothing()
         await session.execute(stmt)
         await session.commit()
@@ -193,6 +214,7 @@ async def attempt_alchemy(
     aux_choices: list[int],
     inventory: dict,
     has_yanhuo: bool = False,
+    free_mix: bool = False,
 ) -> dict:
     allowed, count = await check_and_consume_daily(discord_id)
     if not allowed:
@@ -204,7 +226,9 @@ async def attempt_alchemy(
             return {"ok": False, "reason": f"主药不足：「{ing['item']}」需要 {ing['qty']} 个，当前只有 {have} 个。"}
 
     aux_quality_bonus = 0
-    consumed = dict(recipe["main_ingredients"])
+    consumed: dict[str, int] = {}
+    for ing in recipe["main_ingredients"]:
+        consumed[ing["item"]] = consumed.get(ing["item"], 0) + ing["qty"]
     for i, group in enumerate(recipe["aux_groups"]):
         choice_idx = aux_choices[i] if i < len(aux_choices) else 0
         choice_idx = max(0, min(choice_idx, len(group["options"]) - 1))
@@ -216,8 +240,9 @@ async def attempt_alchemy(
         consumed[opt["item"]] = consumed.get(opt["item"], 0) + opt["qty"]
 
     mastery_count = await get_mastery_count(discord_id, recipe["pill"])
-    success_rate = calc_success_rate(recipe, alchemy_level, mastery_count)
+    success_rate = calc_success_rate(recipe, alchemy_level, mastery_count, free_mix=free_mix)
     success = random.randint(1, 100) <= success_rate
+    print(f"[alchemy] {discord_id} recipe={recipe['recipe_id']} rate={success_rate}% free_mix={free_mix} success={success}")
 
     if not success:
         consequence, lifespan_loss = roll_failure_consequence()
@@ -237,7 +262,19 @@ async def attempt_alchemy(
     new_level, new_exp, leveled_up = await add_alchemy_exp(discord_id, ALCHEMY_EXP_PER_CRAFT)
     known_before = await get_known_recipes(discord_id)
     first_unlock = recipe["recipe_id"] not in known_before
-    await unlock_recipe(discord_id, recipe["recipe_id"])
+    await unlock_recipe(discord_id, recipe["recipe_id"], aux_choices)
+
+    exam_passed = False
+    if recipe["recipe_id"] == "juqiwan_exam" and alchemy_level == 0:
+        async with AsyncSessionLocal() as session:
+            p = await session.get(Player, discord_id)
+            if p and p.alchemy_level == 0:
+                p.alchemy_level = 1
+                p.alchemy_exp = 0
+                p.exam_attempts_left = 0
+                await session.commit()
+        exam_passed = True
+        new_level = 1
 
     return {
         "ok": True,
@@ -254,4 +291,5 @@ async def attempt_alchemy(
         "leveled_up": leveled_up,
         "first_unlock": first_unlock,
         "daily_count": count,
+        "exam_passed": exam_passed,
     }

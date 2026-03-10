@@ -163,7 +163,8 @@ async def player_detail(request: Request, discord_id: str):
 
 
 @app.get("/events", response_class=HTMLResponse)
-async def events(request: Request):
+async def events(request: Request, page: int = 1):
+    PAGE_SIZE = 10
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM public_events ORDER BY started_at DESC"
@@ -172,17 +173,56 @@ async def events(request: Request):
         for r in rows:
             e = dict(r)
             e["data"] = json.loads(e.get("data") or "{}")
-            participants = conn.execute(
-                "SELECT ep.discord_id, ep.contribution, ep.activity, p.name "
+            e["event_source"] = "spirit_rain"
+            participants_raw = conn.execute(
+                "SELECT ep.discord_id, MAX(ep.contribution) as contribution, "
+                "GROUP_CONCAT(ep.activity, ',') as activities, p.name "
                 "FROM public_event_participants ep "
                 "LEFT JOIN players p ON ep.discord_id = p.discord_id "
-                "WHERE ep.event_id = ? ORDER BY ep.contribution DESC",
+                "WHERE ep.event_id = ? "
+                "GROUP BY ep.discord_id ORDER BY contribution DESC",
                 (e["event_id"],)
             ).fetchall()
-            e["participants"] = [dict(p) for p in participants]
+            merged = []
+            for p in participants_raw:
+                p = dict(p)
+                acts = set(a for a in (p["activities"] or "").split(",") if a)
+                p["activities"] = list(acts)
+                merged.append(p)
+            e["participants"] = merged
             events.append(e)
+
+        auctions = conn.execute(
+            "SELECT * FROM wanbao_auctions ORDER BY started_at DESC"
+        ).fetchall()
+        for a in auctions:
+            a = dict(a)
+            lots = conn.execute(
+                "SELECT wl.lot_id, wl.item_name, wl.start_price, wl.current_bid, "
+                "wl.bidder_id, wl.status, p.name as bidder_name "
+                "FROM wanbao_lots wl "
+                "LEFT JOIN players p ON wl.bidder_id = p.discord_id "
+                "WHERE wl.auction_id = ? ORDER BY wl.current_bid DESC",
+                (a["auction_id"],)
+            ).fetchall()
+            a["lots"] = [dict(l) for l in lots]
+            a["event_source"] = "wanbao"
+            a["title"] = "万宝楼大型拍卖会"
+            a["event_type"] = "wanbao_auction"
+            a["started_at"] = a.get("started_at")
+            a["ends_at"] = a.get("ends_at")
+            events.append(a)
+
+        events.sort(key=lambda e: float(e.get("started_at") or 0), reverse=True)
+
+    total = len(events)
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(1, min(page, total_pages))
+    paged = events[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
+
     return templates.TemplateResponse("events.html", {
-        "request": request, "events": events,
+        "request": request, "events": paged,
+        "page": page, "total_pages": total_pages, "total": total,
     })
 
 
@@ -317,6 +357,58 @@ async def techniques_page(request: Request, type_filter: str = "", grade: str = 
         "total": len(all_techs),
         "stat_names": STAT_NAMES,
         "stages": TECHNIQUE_STAGES,
+    })
+
+
+@app.get("/equipment-preview", response_class=HTMLResponse)
+async def equipment_preview(request: Request, slot: str = "", quality: str = "", tier: int = 0, count: int = 1):
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    from utils.equipment import generate_equipment, SLOTS, QUALITY_ORDER, TIER_NAMES, STAT_NAMES
+
+    QUALITY_COLORS = {
+        "普通": "#888888",
+        "精良": "#2ecc71",
+        "稀有": "#3498db",
+        "史诗": "#9b59b6",
+        "传说": "#f1c40f",
+    }
+    QUALITY_BADGE_BG = {
+        "普通": "#555",
+        "精良": "#27ae60",
+        "稀有": "#2980b9",
+        "史诗": "#8e44ad",
+        "传说": "#d4ac0d",
+    }
+
+    count = max(1, min(count, 10))
+    results = []
+    rolled = "count" in request.query_params or "slot" in request.query_params or "quality" in request.query_params or "tier" in request.query_params
+    if rolled:
+        for _ in range(count):
+            eq = generate_equipment(
+                tier=tier,
+                quality=quality if quality else None,
+                slot=slot if slot else None,
+            )
+            eq["color"] = QUALITY_COLORS.get(eq["quality"], "#888")
+            eq["badge_bg"] = QUALITY_BADGE_BG.get(eq["quality"], "#555")
+            eq["tier_label"] = TIER_NAMES[min(eq["tier"], len(TIER_NAMES) - 1)]
+            results.append(eq)
+
+    tiers = [{"val": i, "label": TIER_NAMES[i]} for i in range(len(TIER_NAMES))]
+
+    return templates.TemplateResponse("equipment_preview.html", {
+        "request": request,
+        "results": results,
+        "slots": SLOTS,
+        "qualities": QUALITY_ORDER,
+        "tiers": tiers,
+        "slot": slot,
+        "quality": quality,
+        "tier": tier,
+        "count": count,
+        "stat_names": STAT_NAMES,
     })
 
 

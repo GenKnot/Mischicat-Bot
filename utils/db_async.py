@@ -63,6 +63,7 @@ class Player(Base):
     alchemy_exp: Mapped[int] = mapped_column(Integer, default=0)
     alchemy_daily_count: Mapped[int] = mapped_column(Integer, default=0)
     alchemy_daily_reset: Mapped[float] = mapped_column(Float, default=0)
+    exam_attempts_left: Mapped[int] = mapped_column(Integer, default=0)
     active_buffs: Mapped[str] = mapped_column(Text, default="{}")
     gathering_bonus: Mapped[float] = mapped_column(Float, default=0)
 
@@ -148,3 +149,4 @@ class KnownRecipe(Base):
 
     discord_id: Mapped[str] = mapped_column(String, primary_key=True)
     recipe_id: Mapped[str] = mapped_column(String, primary_key=True)
+    aux_choices: Mapped[str] = mapped_column(String, default="[]")

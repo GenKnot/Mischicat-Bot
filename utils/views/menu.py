@@ -190,6 +190,7 @@ class MainMenuView(discord.ui.View):
             self.add_item(MenuButton("背包", discord.ButtonStyle.secondary, "backpack"))
             self.add_item(MenuButton("功法", discord.ButtonStyle.secondary, "techniques"))
             self.add_item(MenuButton("装备", discord.ButtonStyle.secondary, "equipment"))
+            self.add_item(MenuButton("技艺", discord.ButtonStyle.secondary, "crafting"))
         if city_players:
             self.add_item(MenuButton("玩家", discord.ButtonStyle.secondary, "city_players"))
         if player and player.get("party_id"):
@@ -201,6 +202,8 @@ class MainMenuView(discord.ui.View):
         self.add_item(MenuButton("公共事件", discord.ButtonStyle.secondary, "public_event"))
         if player and player.get("current_city") == "万宝楼":
             self.add_item(MenuButton("万宝楼", discord.ButtonStyle.primary, "wanbao"))
+        if player and player.get("current_city") == "丹阁" and player.get("alchemy_level", 0) == 0:
+            self.add_item(MenuButton("丹阁考核", discord.ButtonStyle.success, "dange_exam"))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user != self.author:
@@ -323,13 +326,23 @@ class MenuButton(discord.ui.Button):
                     view = TechniquesView(interaction.user, cog)
                     await interaction.followup.send(embed=embed, view=view)
             elif self.action == "equipment":
-                equip_cog = cog.bot.cogs.get("Equipment")
-                if equip_cog:
-                    ctx = await cog.bot.get_context(interaction.message)
-                    ctx.author = interaction.user
-                    await equip_cog.equip_details(ctx)
-                else:
-                    await interaction.followup.send("装备系统暂时不可用。", ephemeral=True)
+                from utils.views.equipment import EquipmentManageView, _build_equipment_embed
+                from utils.db import get_equipment_list, get_conn as _gc
+                uid = str(interaction.user.id)
+                with _gc() as conn:
+                    row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
+                    player = dict(row)
+                equips = get_equipment_list(uid)
+                embed = _build_equipment_embed(player, equips)
+                view = EquipmentManageView(interaction.user, cog)
+                await interaction.followup.edit_message(message_id=interaction.message.id, embed=embed, view=view)
+            elif self.action == "crafting":
+                from utils.views.crafting import CraftingMenuView, _crafting_overview_embed
+                await interaction.followup.edit_message(
+                    message_id=interaction.message.id,
+                    embed=_crafting_overview_embed(),
+                    view=CraftingMenuView(interaction.user, cog),
+                )
             elif self.action.startswith("gather:"):
                 gather_type = self.action[len("gather:"):]
                 from utils.views.gathering import GatherView, TYPE_EMOJI
@@ -395,6 +408,48 @@ class MenuButton(discord.ui.Button):
                     await pe_cog.wanbao(ctx)
                 else:
                     await interaction.followup.send("万宝楼系统暂时不可用。", ephemeral=True)
+            elif self.action == "dange_exam":
+                from utils.views.dange import DangeView
+                from utils.db import get_conn as _gc
+                from utils.db_async import AsyncSessionLocal, Player as _Player
+                uid = str(interaction.user.id)
+                with _gc() as conn:
+                    row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
+                    player = dict(row)
+                if player.get("alchemy_level", 0) > 0:
+                    await interaction.followup.send("你已经是炼丹师了，无需再考核。", ephemeral=True)
+                elif player.get("fortune", 0) < 3 or player.get("soul", 0) < 3:
+                    await interaction.followup.send(
+                        f"机缘与神识各需达到 **3点** 方可进入丹阁。\n"
+                        f"当前：机缘 {player.get('fortune',0)} / 神识 {player.get('soul',0)}",
+                        ephemeral=True,
+                    )
+                else:
+                    async with AsyncSessionLocal() as session:
+                        p = await session.get(_Player, uid)
+                        paid = (p.exam_attempts_left > 0) if p else False
+                    view = DangeView(interaction.user, cog, player, paid=paid)
+                    view.set_paid(paid)
+                    from utils.views.dange import _elder_greeting, _elder_greeting_paid
+                    greeting = _elder_greeting_paid(player) if paid else _elder_greeting(player)
+                    embed = discord.Embed(
+                        title="✦ 丹阁 · 炼丹师考核 ✦",
+                        color=discord.Color.gold(),
+                    )
+                    embed.add_field(name="丹阁长老", value=f"*「{greeting}」*", inline=False)
+                    if not paid:
+                        embed.add_field(
+                            name="考核规则",
+                            value=(
+                                f"· 费用：**500 灵石**（含材料）\n"
+                                "· 成功炼出考核丹药即可获得一品炼丹师资质\n"
+                                "· 材料用完可花 300 灵石补充"
+                            ),
+                            inline=False,
+                        )
+                    await interaction.followup.edit_message(
+                        message_id=interaction.message.id, embed=embed, view=view
+                    )
             elif self.action == "back_to_menu":
                 import json
                 uid = str(interaction.user.id)

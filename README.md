@@ -9,6 +9,7 @@ Web 管理面板：[https://catportal.prpr.one/](https://catportal.prpr.one/)
 ---
 
 ## 申请Discord App
+
 1. 访问 [Discord Developer Portal](https://discord.com/developers/applications)，点击 `New Application/新 APP` 新建一个应用。
 2. 进入应用页面，左侧选择 `Bot/机器人`。如 Bot Token 未显示，点击 `Reset Token/重置令牌` 获取 Token（用于 `.env` 里的 `DISCORD_TOKEN`）。
 3. 在 `Privileged Gateway Intents/特权网关意图`区，勾选 `PRESENCE INTEN/在线状态意图`、`SERVER MEMBERS INTENT/服务器成员意图`、`MESSAGE CONTENT INTENT/消息内容意图`。
@@ -16,7 +17,6 @@ Web 管理面板：[https://catportal.prpr.one/](https://catportal.prpr.one/)
 5. 左侧导航选择 `OAuth2` → `OAuth2 URL Generator/生成器`，Scopes/范围 选择 `bot` 和 `applications.commands`（可选）。
 6. 下方 `Bot Permissions/机器人权限` 勾选 `Administrator/管理员`。
 7. 复制下方生成的 OAuth2 授权链接，用浏览器打开，选择你的服务器，点击授权即可将 Bot 添加进服务器。
-
 
 ## 运行
 
@@ -27,6 +27,70 @@ Web 管理面板：[https://catportal.prpr.one/](https://catportal.prpr.one/)
 - `PUBLIC_EVENT_CHANNEL_ID` — 公共事件广播的频道 ID
 - `DB_PATH` — 本地用 `sqlite-data/game.db`，Docker 用 `/app/sqlite-data/game.db`
 - `COMMAND_PREFIX` — 机器人前缀，默认 `cat!`，根据需求自己改
+### 编译版运行
+
+#### 1. 下载 Release
+前往 [Release 页面](https://github.com/GenKnot/Mischicat-Bot/releases) 下载对应系统的预编译包。
+
+#### 2. 解压至任意文件夹
+
+#### 3. 按需修改 `.env` 配置（参考上方「运行」步骤）
+
+#### 4. 双击或命令行运行
+
+- **Windows**  
+  双击 `mischicat-bot.exe`  
+  或命令行进入目录后运行：  
+  ```
+  mischicat-bot.exe
+  ```
+
+- **Linux / MacOS**  
+  命令行进入目录后运行：  
+  ```
+  chmod +x ./mischicat-bot
+  ./mischicat-bot
+  ```
+
+---
+
+### 源码手动运行
+
+#### Windows
+
+1. 安装 [Python 3.10+](https://www.python.org/downloads/windows/)
+2. 进入项目文件夹，安装依赖：  
+   ```
+   python -m venv venv
+   .\venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+3. 按需填写 `.env` 文件
+4. 运行：  
+   ```
+   python main.py
+   ```
+   或双击运行脚本
+   ```
+   run.bat
+   ```
+
+#### Linux / macOS
+
+1. 安装 [Python 3.10+](https://www.python.org/downloads/)
+2. 进入项目文件夹，安装依赖：  
+   ```
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
+   ```
+3. 按需填写 `.env` 文件
+4. 运行：  
+   ```
+   python3 main.py
+   ```
+
+---
 
 填好后启动：Mac / Linux 运行 `./run.sh`，Windows 双击 `run.bat`。
 
@@ -143,3 +207,4 @@ web/         FastAPI 管理面板
 deploy/      k8s 部署配置
 scripts/     其他启动脚本备用
 ```
+

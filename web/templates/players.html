@@ -1,8 +1,105 @@
 {% extends "base.html" %}
 {% block title %}修士列表 · Mischicat{% endblock %}
 {% block content %}
+
+<style>
+  /* ── Player card view (mobile only) ───────────────────────────────── */
+  .player-cards { display: none; }
+
+  @media (max-width: 768px) {
+    .player-table-desktop { display: none; }
+
+    .player-cards {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .player-card {
+      display: block;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      color: var(--text);
+      text-decoration: none;
+      transition: border-color .15s, background .15s;
+    }
+
+    .player-card:hover {
+      border-color: var(--accent);
+      background: rgba(124, 106, 247, 0.04);
+      text-decoration: none;
+    }
+
+    .player-card-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .player-card-name {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 3px;
+    }
+
+    .player-card-sub {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .player-card-badges {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 5px;
+      flex-shrink: 0;
+    }
+
+    .player-card-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .player-card-stat {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 8px 10px;
+    }
+
+    .player-card-stat .key {
+      display: block;
+      font-size: 10px;
+      color: var(--muted);
+      margin-bottom: 3px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    .player-card-stat .val {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .player-card-lifespan-label {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+  }
+</style>
+
 <div class="card">
   <h2>修士列表（{{ players | length }} 人）</h2>
+
   <form method="get" class="filters">
     <input name="q" placeholder="搜索道号 / ID" value="{{ q }}">
     <select name="city">
@@ -13,58 +110,112 @@
     </select>
     <input name="realm" placeholder="境界（如 元婴）" value="{{ realm }}">
     <select name="sort">
-      <option value="cultivation" {% if sort=="cultivation" %}selected{% endif %}>修为排序</option>
-      <option value="lifespan" {% if sort=="lifespan" %}selected{% endif %}>寿元排序</option>
-      <option value="spirit_stones" {% if sort=="spirit_stones" %}selected{% endif %}>灵石排序</option>
-      <option value="last_active" {% if sort=="last_active" %}selected{% endif %}>最近活跃</option>
-      <option value="name" {% if sort=="name" %}selected{% endif %}>道号排序</option>
+      <option value="cultivation" {% if sort == "cultivation" %}selected{% endif %}>修为排序</option>
+      <option value="lifespan" {% if sort == "lifespan" %}selected{% endif %}>寿元排序</option>
+      <option value="spirit_stones" {% if sort == "spirit_stones" %}selected{% endif %}>灵石排序</option>
+      <option value="last_active" {% if sort == "last_active" %}selected{% endif %}>最近活跃</option>
+      <option value="name" {% if sort == "name" %}selected{% endif %}>道号排序</option>
     </select>
     <button type="submit">筛选</button>
     <a href="/players" style="padding:6px 12px;color:var(--muted);font-size:13px">重置</a>
   </form>
 
   {% if players %}
-  <div class="table-wrap">
-  <table>
-    <thead>
-      <tr>
-        <th>道号</th><th>性别</th><th>境界</th><th>修为</th>
-        <th>寿元</th><th>灵石</th><th>所在城市</th><th>状态</th><th>最近活跃</th>
-      </tr>
-    </thead>
-    <tbody>
+
+  {# ── Desktop: table ── #}
+  <div class="player-table-desktop">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>道号</th><th>性别</th><th>境界</th><th>修为</th>
+            <th>寿元</th><th>灵石</th><th>所在城市</th><th>状态</th><th>最近活跃</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in players %}
+          {% set now_ts = now() %}
+          <tr>
+            <td><a href="/players/{{ p.discord_id }}">{{ p.name }}</a></td>
+            <td>{{ p.gender }}</td>
+            <td><span class="badge badge-purple">{{ p.realm }}</span></td>
+            <td>{{ p.cultivation }}</td>
+            <td>
+              {{ p.lifespan }} / {{ p.lifespan_max }}
+              <div class="progress-bar">
+                <div class="fill" style="width:{{ [[(p.lifespan / p.lifespan_max * 100) | int, 0] | max, 100] | min }}%"></div>
+              </div>
+            </td>
+            <td>{{ p.spirit_stones }}</td>
+            <td>{{ p.current_city }}</td>
+            <td>
+              {% if p.cultivating_until and p.cultivating_until > now_ts %}
+                <span class="badge badge-teal">闭关中</span>
+              {% elif p.gathering_until and p.gathering_until > now_ts %}
+                <span class="badge badge-yellow">采集中</span>
+              {% elif p.active_quest and p.quest_due and p.quest_due > now_ts %}
+                <span class="badge badge-purple">任务中</span>
+              {% else %}
+                <span class="badge badge-gray">空闲</span>
+              {% endif %}
+            </td>
+            <td>{{ ts(p.last_active) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# ── Mobile: card list ── #}
+  <div class="player-cards">
     {% for p in players %}
     {% set now_ts = now() %}
-    <tr>
-      <td><a href="/players/{{ p.discord_id }}">{{ p.name }}</a></td>
-      <td>{{ p.gender }}</td>
-      <td><span class="badge badge-purple">{{ p.realm }}</span></td>
-      <td>{{ p.cultivation }}</td>
-      <td>
-        {{ p.lifespan }} / {{ p.lifespan_max }}
+    <a class="player-card" href="/players/{{ p.discord_id }}">
+      <div class="player-card-head">
+        <div>
+          <div class="player-card-name">{{ p.name }}</div>
+          <div class="player-card-sub">{{ p.gender }} · {{ p.current_city }}</div>
+        </div>
+        <div class="player-card-badges">
+          <span class="badge badge-purple">{{ p.realm }}</span>
+          {% if p.cultivating_until and p.cultivating_until > now_ts %}
+            <span class="badge badge-teal">闭关中</span>
+          {% elif p.gathering_until and p.gathering_until > now_ts %}
+            <span class="badge badge-yellow">采集中</span>
+          {% elif p.active_quest and p.quest_due and p.quest_due > now_ts %}
+            <span class="badge badge-purple">任务中</span>
+          {% else %}
+            <span class="badge badge-gray">空闲</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="player-card-stats">
+        <div class="player-card-stat">
+          <span class="key">修为</span>
+          <span class="val">{{ p.cultivation }}</span>
+        </div>
+        <div class="player-card-stat">
+          <span class="key">灵石</span>
+          <span class="val">{{ p.spirit_stones }}</span>
+        </div>
+        <div class="player-card-stat">
+          <span class="key">最近活跃</span>
+          <span class="val">{{ ts(p.last_active) }}</span>
+        </div>
+      </div>
+
+      <div>
+        <div class="player-card-lifespan-label">寿元 {{ p.lifespan }} / {{ p.lifespan_max }}</div>
         <div class="progress-bar">
           <div class="fill" style="width:{{ [[(p.lifespan / p.lifespan_max * 100) | int, 0] | max, 100] | min }}%"></div>
         </div>
-      </td>
-      <td>{{ p.spirit_stones }}</td>
-      <td>{{ p.current_city }}</td>
-      <td>
-        {% if p.cultivating_until and p.cultivating_until > now_ts %}
-          <span class="badge badge-teal">闭关中</span>
-        {% elif p.gathering_until and p.gathering_until > now_ts %}
-          <span class="badge badge-yellow">采集中</span>
-        {% elif p.active_quest and p.quest_due and p.quest_due > now_ts %}
-          <span class="badge badge-purple">任务中</span>
-        {% else %}
-          <span class="badge badge-gray">空闲</span>
-        {% endif %}
-      </td>
-      <td>{{ ts(p.last_active) }}</td>
-    </tr>
+      </div>
+    </a>
     {% endfor %}
-    </tbody>
-  </table>
   </div>
+
   {% else %}
   <p class="empty">没有符合条件的修士</p>
   {% endif %}

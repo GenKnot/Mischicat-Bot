@@ -11,15 +11,121 @@ class PlayerActionView(discord.ui.View):
         self.target = target
         self.in_pvp_zone = in_pvp_zone
         self.add_item(PartyInviteButton(viewer, target))
+        
+        has_dual = self._check_dual_technique(viewer)
+        if has_dual:
+            dual_btn = discord.ui.Button(label="💕 邀请双修", style=discord.ButtonStyle.primary)
+            dual_btn.callback = self._dual_cultivate_callback
+            self.add_item(dual_btn)
+        
         atk_btn = discord.ui.Button(label="⚔️ 发起攻击", style=discord.ButtonStyle.danger, disabled=not in_pvp_zone)
         atk_btn.callback = self._attack_callback
         self.add_item(atk_btn)
+    
+    def _check_dual_technique(self, player: dict) -> bool:
+        import json
+        techniques = json.loads(player.get("techniques") or "[]")
+        for t in techniques:
+            name = t if isinstance(t, str) else t.get("name", "")
+            if name == "双修功法":
+                return True
+        return False
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user != self.author:
             await interaction.response.send_message("这不是你的面板。", ephemeral=True)
             return False
         return True
+    
+    async def _dual_cultivate_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        import random
+        from utils.db import get_conn
+        from utils.character import years_to_seconds
+        
+        uid = str(interaction.user.id)
+        target_uid = self.target["discord_id"]
+        
+        with get_conn() as conn:
+            inviter = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
+            target = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (target_uid,)).fetchone())
+        
+        if not inviter or not target:
+            return await interaction.followup.send("数据异常。", ephemeral=True)
+        
+        if inviter["is_dead"] or target["is_dead"]:
+            return await interaction.followup.send("对方已坐化。", ephemeral=True)
+        
+        if inviter["current_city"] != target["current_city"]:
+            return await interaction.followup.send("双修需在同一城市。", ephemeral=True)
+        
+        import time
+        now = time.time()
+        cooldown_secs = years_to_seconds(2)
+        
+        if inviter.get("last_dual_cultivate") and now - inviter["last_dual_cultivate"] < cooldown_secs:
+            from utils.character import seconds_to_years
+            remaining = seconds_to_years(cooldown_secs - (now - inviter["last_dual_cultivate"]))
+            return await interaction.followup.send(f"你的双修冷却中，还需 {remaining:.1f} 游戏年。", ephemeral=True)
+        
+        if target.get("last_dual_cultivate") and now - target["last_dual_cultivate"] < cooldown_secs:
+            from utils.character import seconds_to_years
+            remaining = seconds_to_years(cooldown_secs - (now - target["last_dual_cultivate"]))
+            return await interaction.followup.send(f"对方双修冷却中，还需 {remaining:.1f} 游戏年。", ephemeral=True)
+        
+        if inviter.get("cultivating_until") and now < inviter["cultivating_until"]:
+            return await interaction.followup.send("你正在闭关，无法双修。", ephemeral=True)
+        
+        if target.get("cultivating_until") and now < target["cultivating_until"]:
+            return await interaction.followup.send("对方正在闭关，无法双修。", ephemeral=True)
+        
+        if inviter["lifespan"] < 1:
+            return await interaction.followup.send("你的寿元不足。", ephemeral=True)
+        
+        if target["lifespan"] < 1:
+            return await interaction.followup.send("对方寿元不足。", ephemeral=True)
+        
+        inv_virgin = bool(inviter["is_virgin"])
+        tgt_virgin = bool(target["is_virgin"])
+        both_virgin = inv_virgin and tgt_virgin
+        
+        if both_virgin:
+            multiplier = random.uniform(10, 20)
+            mult_desc = f"双方皆为清白之身，阴阳交融，修为暴涨（**{multiplier:.1f}倍**）"
+        elif inv_virgin or tgt_virgin:
+            multiplier = 5.0
+            mult_desc = "一方清白之身，修为大增（**5倍**）"
+        else:
+            multiplier = 1.2
+            mult_desc = "双修加持，修为略有提升（**1.2倍**）"
+        
+        from utils.views.dual import DualCultivateInviteView
+        
+        try:
+            target_user = await interaction.client.fetch_user(int(target_uid))
+        except:
+            return await interaction.followup.send("无法找到对方用户。", ephemeral=True)
+        
+        embed = discord.Embed(
+            title="✦ 双修邀请 ✦",
+            description=(
+                f"**{interaction.user.display_name}** 邀请 {target_user.mention} 进行双修。\n\n"
+                f"{mult_desc}\n"
+                f"双修将消耗双方各 **1 游戏年** 寿元，持续现实 **2 小时**。\n\n"
+                f"{target_user.mention} 是否接受？"
+            ),
+            color=discord.Color.pink(),
+        )
+        
+        cultivation_cog = interaction.client.cogs.get("Cultivation")
+        if not cultivation_cog:
+            return await interaction.followup.send("系统异常。", ephemeral=True)
+        
+        await interaction.followup.send(
+            target_user.mention,
+            embed=embed,
+            view=DualCultivateInviteView(cultivation_cog, interaction.user, target_user, multiplier, both_virgin)
+        )
 
     async def _attack_callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -60,7 +166,7 @@ class PlayerActionView(discord.ui.View):
             else:
                 result_embed.description += f"**{atk['name']}** 败北，但 **{dfn['name']}** 未能逃脱（逃跑成功率 {escape_pct}%）！"
                 result_embed.color = discord.Color.dark_red()
-                await interaction.followup.send(embed=result_embed, view=VictoryActionView(interaction.user, atk, dfn), ephemeral=True)
+                await interaction.followup.send(embed=result_embed, view=VictoryActionView(interaction.user, dfn, atk), ephemeral=True)
 
 
 class VictoryActionView(discord.ui.View):

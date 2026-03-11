@@ -157,7 +157,8 @@ class GatherButton(discord.ui.Button):
         actual_years = max(0.25, actual_years)
 
         gathering_until = now + years_to_seconds(actual_years)
-        lifespan_cost = max(1, int(actual_years)) if actual_years >= 1 else 0
+        import math
+        lifespan_cost = math.ceil(actual_years) if actual_years > 0 else 0
         new_lifespan = player["lifespan"] - lifespan_cost
 
         active_buffs_raw = player.get("active_buffs") or "{}"

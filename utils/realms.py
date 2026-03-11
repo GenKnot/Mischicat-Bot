@@ -105,6 +105,31 @@ def roll_breakthrough(realm: str, physique: int, bone: int, cultivation: int) ->
     return False, outcome
 
 
+_TECHNIQUE_SLOTS = [
+    ("道祖", 41),
+    ("大罗初期", 38),
+    ("太乙初期", 35),
+    ("金仙初期", 32),
+    ("真仙初期", 29),
+    ("大乘期初期", 26),
+    ("合体期初期", 23),
+    ("炼虚期初期", 20),
+    ("化神期初期", 17),
+    ("元婴期初期", 12),
+    ("结丹期初期", 9),
+    ("筑基期1层", 7),
+    ("炼气期1层", 5),
+]
+
+
+def get_technique_slot_limit(realm: str) -> int:
+    idx = get_realm_index(realm)
+    for threshold_realm, limit in _TECHNIQUE_SLOTS:
+        if idx >= get_realm_index(threshold_realm):
+            return limit
+    return 5
+
+
 def apply_failure(cultivation: int, lifespan: int, outcome: str) -> tuple[int, int, str]:
     if outcome == FAIL_LIGHT:
         new_cultivation = cultivation // 2

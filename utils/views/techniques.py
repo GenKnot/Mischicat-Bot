@@ -54,12 +54,14 @@ def _build_techniques_embed(player: dict) -> discord.Embed:
         lines.append(f"{mark} **{t['name']}**（{grade} · {ttype}）　阶段：{stage}")
 
     equipped_count = sum(1 for t in techniques if t.get("equipped"))
+    from utils.realms import get_technique_slot_limit
+    slot_limit = get_technique_slot_limit(player["realm"])
     embed = discord.Embed(
         title=f"✦ {player['name']} 的功法 ✦",
         description="\n".join(lines),
         color=discord.Color.teal(),
     )
-    embed.set_footer(text=f"✦ 已装备　○ 未装备　已装备 {equipped_count}/5")
+    embed.set_footer(text=f"✦ 已装备　○ 未装备　已装备 {equipped_count}/{slot_limit}")
     if player.get("sect"):
         embed.add_field(name="宗门", value=f"{player['sect']} · {player.get('sect_rank', '外门弟子')}", inline=False)
     return embed
@@ -313,9 +315,11 @@ class ToggleEquipView(discord.ui.View):
             _save_techniques(uid, techniques)
             msg = f"已卸下功法「**{name}**」。"
         else:
+            from utils.realms import get_technique_slot_limit
             equipped_count = sum(1 for t in techniques if t.get("equipped"))
-            if equipped_count >= 5:
-                return await interaction.response.send_message("已装备5本功法，请先卸下一本。", ephemeral=True)
+            slot_limit = get_technique_slot_limit(player["realm"])
+            if equipped_count >= slot_limit:
+                return await interaction.response.send_message(f"当前境界（{player['realm']}）最多装备 {slot_limit} 本功法，请先卸下一本。", ephemeral=True)
             target["equipped"] = True
             _save_techniques(uid, techniques)
             msg = f"已装备功法「**{name}**」。"

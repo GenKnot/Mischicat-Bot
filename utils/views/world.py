@@ -91,6 +91,13 @@ class WorldMenuView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=SectAlignmentView(interaction.user, self.cog))
 
+    @discord.ui.button(label="排行榜", style=discord.ButtonStyle.primary, row=1)
+    async def leaderboard_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from utils.views.leaderboard import LeaderboardView, _build_realm_embed
+        embed = _build_realm_embed()
+        embed.set_footer(text="仅显示存活修士 · 前十名")
+        await interaction.response.edit_message(embed=embed, view=LeaderboardView(interaction.user, self.cog))
+
     @discord.ui.button(label="返回主菜单", style=discord.ButtonStyle.secondary, row=1)
     async def back_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.cog:

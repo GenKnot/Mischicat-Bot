@@ -54,7 +54,7 @@ def _montreal_now() -> datetime:
 def _last_trigger_date_str() -> str | None:
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT data FROM public_events WHERE event_type = 'spirit_rain' AND status IN ('active', 'ended', 'pending') ORDER BY started_at DESC LIMIT 1"
+            "SELECT data FROM public_events WHERE event_type = 'spirit_rain' AND status IN ('active', 'ended') ORDER BY started_at DESC LIMIT 1"
         ).fetchone()
     if not row:
         return None
@@ -94,7 +94,14 @@ class PublicEventsCog(commands.Cog, name="PublicEvents"):
 
         if not active:
             last_date = _last_trigger_date_str()
-            if last_date != today_str:
+            trigger_ts = _today_trigger_ts()
+            now_ts = time.time()
+
+            if h >= 21 and last_date != today_str and now_ts >= trigger_ts:
+                if 4 not in self._preview_sent:
+                    self._preview_sent.add(4)
+                    await self._trigger_spirit_rain(today_str)
+            elif last_date != today_str:
                 for i, (ph, pm) in enumerate(zip(PREVIEW_HOURS, PREVIEW_MINUTES)):
                     if h == ph and m == pm and i not in self._preview_sent:
                         self._preview_sent.add(i)
@@ -107,10 +114,8 @@ class PublicEventsCog(commands.Cog, name="PublicEvents"):
                             await self._trigger_spirit_rain(today_str)
                         break
 
-            if now_mt.hour >= 23 and len(self._preview_sent) > 0:
-                last_date = _last_trigger_date_str()
-                if today_str not in (last_date or ""):
-                    self._preview_sent.clear()
+            if h >= 22 and len(self._preview_sent) > 0:
+                self._preview_sent.clear()
 
         await self._wanbao_scheduler(now_mt, today_str, h, m)
 

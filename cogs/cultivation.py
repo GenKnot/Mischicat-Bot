@@ -8,15 +8,30 @@ from utils.character import (
     calc_cultivation_gain, years_to_seconds, seconds_to_years,
     get_cultivation_bonus, get_effective_lifespan_max, REALM_LIFESPAN,
 )
-from utils.realms import (
-    cultivation_needed, lifespan_max_for_realm, next_realm,
-    roll_breakthrough, apply_failure,
-)
+from utils.realms import cultivation_needed, lifespan_max_for_realm
 from utils.config import COMMAND_PREFIX
 from utils.views import MainMenuView, ProfileView, CultivateView, ClaimCultivationView, DualCultivateInviteView, YinYangView, _build_menu_embed
 from utils.db import get_conn
 from utils.world import CITIES
 from utils.player import get_player, is_defending, settle_time, apply_updates, can_breakthrough
+
+from utils.death_rebirth_logic import (
+    check_death, handle_death, handle_rebirth, can_rebirth,
+    should_trigger_yinyang, mark_yinyang_triggered, calculate_rebirth_bonus
+)
+from utils.breakthrough_logic import (
+    can_breakthrough as async_can_breakthrough,
+    do_breakthrough_chain as async_do_breakthrough_chain,
+    handle_zhuji_breakthrough, handle_ningdan_breakthrough, handle_huaying_breakthrough
+)
+from utils.dual_cultivation_logic import (
+    check_dual_requirements, start_dual_cultivation
+)
+from utils.cultivation_logic import (
+    start_cultivation as async_start_cultivation,
+    stop_cultivation as async_stop_cultivation,
+    claim_cultivation as async_claim_cultivation
+)
 
 
 class CultivationCog(commands.Cog, name="Cultivation"):
@@ -40,88 +55,47 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         return can_breakthrough(player)
 
     def _calc_rebirth_bonus(self, player: dict) -> dict:
-        rebirth_count = player.get("rebirth_count", 0)
-        mult = 1 + rebirth_count * 0.5
-        return {
-            "comprehension": max(0, int((player.get("comprehension", 5) - 5) * 0.3 * mult)),
-            "physique":      max(0, int((player.get("physique", 5) - 5) * 0.3 * mult)),
-            "fortune":       max(0, int((player.get("fortune", 5) - 5) * 0.3 * mult)),
-            "bone":          max(0, int((player.get("bone", 5) - 5) * 0.3 * mult)),
-            "soul":          max(0, int((player.get("soul", 5) - 5) * 0.3 * mult)),
-        }
+        return calculate_rebirth_bonus(player)
 
     async def _check_dead(self, ctx, player) -> bool:
-        if player["lifespan"] <= 0 or player["is_dead"]:
-            uid = str(ctx.author.id)
-            if await self._try_yinyang(ctx, player, uid):
-                return True
-            await self._handle_death(ctx, player, uid)
+        uid = str(ctx.author.id)
+        is_dead, player_dict = await check_death(uid)
+        
+        if not is_dead:
+            return False
+        
+        if await self._try_yinyang(ctx, player, uid):
             return True
-        return False
+        
+        can_reb, player_dict = await can_rebirth(uid)
+        
+        if can_reb:
+            result = await handle_rebirth(uid, player_dict)
+            if result["success"]:
+                bonus_str = "  ".join(f"{k} +{v}" for k, v in result["bonus"].items() if v > 0)
+                await ctx.send(
+                    f"{ctx.author.mention} **{result['name']}** 寿元已尽，魂归天道。\n"
+                    f"然而——**{result['reason']}**，道友得以轮回重生！\n"
+                    f"第 **{result['rebirth_count']}** 次轮回，携带前世感悟：{bonus_str}\n"
+                    f"可使用 `{COMMAND_PREFIX}查看` 查看新角色。"
+                )
+        else:
+            result = await handle_death(uid)
+            if result["success"]:
+                await ctx.send(
+                    f"{ctx.author.mention} 道友 **{result['name']}** 寿元已尽，魂归天道。\n"
+                    f"尘归尘，土归土，可使用 `{COMMAND_PREFIX}创建角色` 重入修仙之路。"
+                )
+        
+        return True
 
     async def _handle_death(self, ctx, player, uid: str):
-        import json
-        sect = player.get("sect") or ""
-        has_bahongchen = player.get("has_bahongchen", 0)
-        rebirth_count = player.get("rebirth_count", 0)
-        is_xianzang = sect == "仙葬谷"
-        can_rebirth = is_xianzang or bool(has_bahongchen)
-
-        if can_rebirth:
-            bonus = self._calc_rebirth_bonus(player)
-            new_rebirth = rebirth_count + 1
-            lifespan = REALM_LIFESPAN["炼气期"]
-            now = time.time()
-            starting_city = random.choice(CITIES)["name"]
-            with get_conn() as conn:
-                conn.execute("""
-                    UPDATE players SET
-                        realm='炼气期1层', cultivation=0, lifespan=?, lifespan_max=?,
-                        spirit_stones=?, is_dead=0, is_virgin=1,
-                        sect=NULL, sect_rank=NULL,
-                        cultivating_until=NULL, cultivating_years=NULL,
-                        active_quest=NULL, quest_due=NULL,
-                        gathering_until=NULL, gathering_type=NULL,
-                        explore_count=0, explore_reset_year=0,
-                        current_city=?, last_active=?,
-                        rebirth_count=?,
-                        comprehension = comprehension + ?,
-                        physique = physique + ?,
-                        fortune = fortune + ?,
-                        bone = bone + ?,
-                        soul = soul + ?
-                    WHERE discord_id=?
-                """, (
-                    lifespan, lifespan, 500,
-                    starting_city, now, new_rebirth,
-                    bonus["comprehension"], bonus["physique"],
-                    bonus["fortune"], bonus["bone"], bonus["soul"],
-                    uid
-                ))
-                conn.commit()
-            reason = "仙葬谷轮回传承" if is_xianzang else "阴阳奇遇感应"
-            bonus_str = "  ".join(f"{k} +{v}" for k, v in bonus.items() if v > 0)
-            await ctx.send(
-                f"{ctx.author.mention} **{player['name']}** 寿元已尽，魂归天道。\n"
-                f"然而——**{reason}**，道友得以轮回重生！\n"
-                f"第 **{new_rebirth}** 次轮回，携带前世感悟：{bonus_str}\n"
-                f"可使用 `{COMMAND_PREFIX}查看` 查看新角色。"
-            )
-        else:
-            with get_conn() as conn:
-                conn.execute("UPDATE players SET is_dead = 1 WHERE discord_id = ?", (uid,))
-                conn.commit()
-            await ctx.send(
-                f"{ctx.author.mention} 道友 **{player['name']}** 寿元已尽，魂归天道。\n"
-                f"尘归尘，土归土，可使用 `{COMMAND_PREFIX}创建角色` 重入修仙之路。"
-            )
+        pass
 
     async def _try_yinyang(self, ctx, player, uid: str) -> bool:
-        import random as _r
-        if player.get("has_bahongchen") or player.get("rebirth_count", 0) > 0:
+        if not should_trigger_yinyang(player):
             return False
-        if _r.random() > 0.0003:
-            return False
+        
         from utils.events.adventure import YINYANG_EVENT, YINYANG_FINALE
         embed = discord.Embed(
             title=f"✦ {YINYANG_EVENT['title']} ✦",
@@ -186,6 +160,18 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             embed.add_field(name="逃跑成功率", value=f"+{player['escape_rate']}%", inline=True)
         if player.get("has_bahongchen"):
             embed.add_field(name="奇遇", value="阴阳两界 · 已触发", inline=False)
+        from utils.combat import calc_power, calc_escape_rate
+        power = calc_power(player)
+        escape_pct = calc_escape_rate(player) * 100
+        embed.add_field(name="综合战力", value=f"{power:.1f}", inline=True)
+        embed.add_field(name="逃跑成功率", value=f"{escape_pct:.1f}%", inline=True)
+        alchemy_level = player.get("alchemy_level", 0)
+        if alchemy_level > 0:
+            from utils.alchemy import ALCHEMY_EXP_THRESHOLDS
+            alchemy_exp = player.get("alchemy_exp", 0)
+            next_exp = ALCHEMY_EXP_THRESHOLDS[alchemy_level + 1] if alchemy_level < 9 and alchemy_level + 1 < len(ALCHEMY_EXP_THRESHOLDS) else None
+            exp_str = f"{alchemy_exp} / {next_exp}" if next_exp else f"{alchemy_exp}（满级）"
+            embed.add_field(name=f"炼丹师 {alchemy_level} 品", value=f"经验 {exp_str}", inline=False)
         with get_conn() as conn:
             city_rows = conn.execute(
                 "SELECT discord_id, name, realm, cultivation FROM players "
@@ -238,71 +224,38 @@ class CultivationCog(commands.Cog, name="Cultivation"):
 
     async def start_cultivate(self, interaction: discord.Interaction, years: int):
         uid = str(interaction.user.id)
-        player = self._get_player(uid)
-        if not player:
-            return await interaction.followup.send("尚未踏入修仙之路。")
+        
         if self._is_defending(uid):
             return await interaction.followup.send("守城期间无法修炼，专心守城！", ephemeral=True)
-        updates, _ = self._settle_time(player)
-        self._apply_updates(uid, updates)
-        player = self._get_player(uid)
-        if player["lifespan"] < years:
-            return await interaction.followup.send(f"寿元不足，无法修炼 {years} 年。")
-        now = time.time()
-        cultivating_until = now + years_to_seconds(years)
-        bonus = get_cultivation_bonus(uid, player["current_city"], player.get("cave"))
-        from utils.buffs import get_cultivation_speed_bonus
-        speed_bonus = get_cultivation_speed_bonus(player)
-        if speed_bonus > 0:
-            bonus += speed_bonus
-        gain = int(calc_cultivation_gain(years, player["comprehension"], player["spirit_root_type"]) * (1 + bonus))
-        with get_conn() as conn:
-            conn.execute("""
-                UPDATE players SET
-                    cultivating_until = ?, cultivating_years = ?, last_active = ?
-                WHERE discord_id = ?
-            """, (cultivating_until, years, now, uid))
-            conn.commit()
-        needed = cultivation_needed(player["realm"])
-        pill_note = f"（修炼速度加成 +{int(speed_bonus * 100)}%）\n" if speed_bonus > 0 else ""
+        
+        result = await async_start_cultivation(uid, years)
+        
+        if not result["success"]:
+            return await interaction.followup.send(result["message"])
+        
+        pill_note = f"（修炼速度加成 +{int(result['speed_bonus'] * 100)}%）\n" if result.get("speed_bonus", 0) > 0 else ""
+        
         await interaction.followup.send(
-            f"{interaction.user.mention} **{player['name']}** 开始闭关修炼 **{years} 年**（现实 {years * 2} 小时）。\n"
+            f"{interaction.user.mention} **{result['name']}** 开始闭关修炼 **{years} 年**（现实 {years * 2} 小时）。\n"
             f"{pill_note}"
-            f"修为进度：{player['cultivation']}/{needed}，出关后将获得约 +{gain}\n"
+            f"修为进度：{result['cultivation']}/{result['needed']}，出关后将获得约 +{result['gain']}\n"
             f"闭关结束后将收到通知。"
         )
 
     async def claim_cultivation(self, interaction: discord.Interaction, uid: str):
-        player = self._get_player(uid)
-        if not player:
-            return await interaction.response.send_message("角色不存在。")
-        now = time.time()
-        if player["cultivating_until"] and now < player["cultivating_until"]:
-            return await interaction.response.send_message("闭关尚未结束，请耐心等待。")
-        if not player["cultivating_until"]:
-            return await interaction.response.send_message("当前没有待领取的修炼成果。")
-        years_done = player.get("cultivating_years") or 0
-        bonus = get_cultivation_bonus(uid, player["current_city"], player.get("cave"))
-        from utils.buffs import get_cultivation_speed_bonus
-        speed_bonus = get_cultivation_speed_bonus(player)
-        if speed_bonus > 0:
-            bonus += speed_bonus
-        gain = int(calc_cultivation_gain(years_done, player["comprehension"], player["spirit_root_type"]) * (1 + bonus))
-        new_cultivation = player["cultivation"] + gain
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE players SET cultivation = ?, cultivating_until = NULL, cultivating_years = NULL WHERE discord_id = ?",
-                (new_cultivation, uid)
-            )
-            conn.commit()
+        result = await async_claim_cultivation(uid)
+        
+        if not result["success"]:
+            return await interaction.response.send_message(result["message"])
+        
         self._notified.discard(uid)
-        player = self._get_player(uid)
-        needed = cultivation_needed(player["realm"])
-        can_bt = self._can_breakthrough(player)
-        embed = discord.Embed(title="✦ 修炼成果已领取 ✦", description=f"**{player['name']}** 出关！", color=discord.Color.teal())
-        embed.add_field(name="修为获得", value=f"+{gain}", inline=True)
-        embed.add_field(name="当前修为", value=f"{player['cultivation']} / {needed}", inline=True)
-        embed.add_field(name="剩余寿元", value=f"{player['lifespan']} 年", inline=True)
+        
+        can_bt = result["cultivation"] >= result["needed"]
+        
+        embed = discord.Embed(title="✦ 修炼成果已领取 ✦", description=f"**{result['name']}** 出关！", color=discord.Color.teal())
+        embed.add_field(name="修为获得", value=f"+{result['gain']}", inline=True)
+        embed.add_field(name="当前修为", value=f"{result['cultivation']} / {result['needed']}", inline=True)
+        embed.add_field(name="剩余寿元", value=f"{result['lifespan']} 年", inline=True)
         if can_bt:
             embed.add_field(name="提示", value="修为已圆满，可尝试突破！", inline=False)
         await interaction.response.send_message(embed=embed)
@@ -402,51 +355,19 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         await interaction.followup.send(result)
 
     async def _do_breakthrough_chain(self, uid: str, player: dict, now: float) -> str:
-        chain = []
-        current = player
-        while True:
-            nxt = next_realm(current["realm"])
-            if not nxt:
-                chain.append("道友已至大道巅峰。")
-                break
-            success, outcome = roll_breakthrough(current["realm"], current["physique"], current["bone"], current["cultivation"])
-            if success:
-                new_lifespan_max = lifespan_max_for_realm(nxt)
-                lifespan_gain = max(0, new_lifespan_max - current["lifespan_max"])
-                new_lifespan = current["lifespan"] + lifespan_gain
-                with get_conn() as conn:
-                    conn.execute(
-                        "UPDATE players SET realm = ?, lifespan = ?, lifespan_max = ?, cultivation = 0, last_active = ? WHERE discord_id = ?",
-                        (nxt, new_lifespan, new_lifespan_max, now, uid)
-                    )
-                    conn.commit()
-                lifespan_line = f"寿元上限→{new_lifespan_max}年" if lifespan_gain > 0 else f"寿元{new_lifespan}年"
-                chain.append(f"**{current['realm']}** ➜ **{nxt}**（{lifespan_line}）")
-                current = self._get_player(uid)
-                if not self._can_breakthrough(current):
-                    break
-            else:
-                new_cultivation, new_lifespan, fail_msg = apply_failure(current["cultivation"], current["lifespan"], outcome)
-                with get_conn() as conn:
-                    conn.execute("UPDATE players SET cultivation = ?, lifespan = ?, last_active = ? WHERE discord_id = ?",
-                                 (new_cultivation, new_lifespan, now, uid))
-                    conn.commit()
-                current = self._get_player(uid)
-                if current["lifespan"] <= 0:
-                    with get_conn() as conn:
-                        conn.execute("UPDATE players SET is_dead = 1 WHERE discord_id = ?", (uid,))
-                        conn.commit()
-                    chain.append(f"突破失败，{fail_msg}寿元耗尽，魂归天道。")
-                else:
-                    needed = cultivation_needed(current["realm"])
-                    chain.append(f"突破失败，{fail_msg}修为：{new_cultivation}/{needed}　寿元：{new_lifespan}年")
-                break
-
+        result = await async_do_breakthrough_chain(uid)
+        
+        if not result["success"]:
+            return result["message"]
+        
+        chain = result["chain"]
+        successes = result["successes"]
+        fail_line = result["fail_line"]
+        
         if len(chain) == 1:
             prefix = "🎉 突破成功！\n" if "➜" in chain[0] else ""
             return prefix + chain[0]
-        successes = [c for c in chain if "➜" in c]
-        fail_line = next((c for c in chain if "➜" not in c), "")
+        
         msg = f"🎉 **{player['name']}** 连续突破 {len(successes)} 次！\n" + "\n".join(successes)
         if fail_line:
             msg += f"\n\n{fail_line}"
@@ -454,106 +375,69 @@ class CultivationCog(commands.Cog, name="Cultivation"):
 
     async def send_stop(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
-        now = time.time()
-        result = await self._stop_cultivation_with_pair(uid, now, actor_name=interaction.user.display_name)
-        if not result:
-            return await interaction.followup.send("道友当前并未在闭关。")
-        await interaction.followup.send(f"{interaction.user.mention} {result}")
-
-    async def _stop_cultivation_with_pair(self, uid: str, now: float, actor_name: str = "") -> str | None:
-        player = self._get_player(uid)
-        if not player:
-            return None
-        if not player.get("cultivating_until") or now >= player["cultivating_until"]:
-            return None
-
-        def _calc_stop(p: dict, is_dual: bool) -> tuple[int, int, int, int]:
-            elapsed_years = seconds_to_years(now - (p.get("last_active") or now))
-            total_years = p.get("cultivating_years") or 0
-            actual_years = min(int(elapsed_years), int(total_years or 0))
-            overflow = p.get("cultivation_overflow") or 0
-            if overflow > 0:
-                gain = int(overflow * actual_years / max(int(total_years or 1), 1))
-            else:
-                bonus = get_cultivation_bonus(str(p["discord_id"]), p["current_city"], p.get("cave"))
-                from utils.buffs import get_cultivation_speed_bonus
-                speed_bonus = get_cultivation_speed_bonus(p)
-                if speed_bonus > 0:
-                    bonus += speed_bonus
-                gain = int(calc_cultivation_gain(actual_years, p["comprehension"], p["spirit_root_type"]) * (1 + bonus))
-            new_cultivation = (p.get("cultivation") or 0) + gain
-            if is_dual:
-                new_lifespan = (p.get("lifespan") or 0) + (int(total_years or 0) - actual_years)
-                new_lifespan = min(new_lifespan, get_effective_lifespan_max(p))
-            else:
-                new_lifespan = (p.get("lifespan") or 0) - actual_years
-            return actual_years, gain, new_cultivation, new_lifespan
-
-        partner_id = (player.get("dual_partner_id") or "").strip()
-        is_dual = bool(partner_id)
-        partner = self._get_player(partner_id) if is_dual else None
-        partner_active = bool(
-            partner
-            and partner.get("cultivating_until")
-            and now < partner["cultivating_until"]
-            and str(partner.get("dual_partner_id") or "") == uid
-        )
-
-        # Solo stop
-        if not is_dual or not partner_active:
-            actual_years, gain, new_cultivation, new_lifespan = _calc_stop(player, is_dual=False)
-            with get_conn() as conn:
-                conn.execute("""
-                    UPDATE players SET cultivation = ?, lifespan = ?,
-                        cultivation_overflow = 0,
-                        cultivating_until = NULL, cultivating_years = NULL,
-                        dual_partner_id = NULL,
-                        last_active = ?
-                    WHERE discord_id = ?
-                """, (new_cultivation, new_lifespan, now, uid))
-                conn.commit()
-            needed = cultivation_needed(player["realm"])
-            return (
-                f"**{player['name']}** 退出闭关。\n"
-                f"实际修炼 **{actual_years} 年**，获得修为 **+{gain}**。\n"
-                f"修为进度：{new_cultivation}/{needed}　寿元剩余：{new_lifespan} 年"
+        result = await async_stop_cultivation(uid)
+        
+        if not result["success"]:
+            return await interaction.followup.send(result["message"])
+        
+        if not result["is_dual"]:
+            msg = (
+                f"**{result['name']}** 退出闭关。\n"
+                f"实际修炼 **{result['actual_years']} 年**，获得修为 **+{result['gain']}**。\n"
+                f"修为进度：{result['cultivation']}/{result['needed']}　寿元剩余：{result['lifespan']} 年"
             )
-
-        # Dual stop: stop both sides together
-        a_years, a_gain, a_cult, a_life = _calc_stop(player, is_dual=True)
-        b_years, b_gain, b_cult, b_life = _calc_stop(partner, is_dual=True)
-        with get_conn() as conn:
-            for puid, nc, nl in [(uid, a_cult, a_life), (partner_id, b_cult, b_life)]:
-                conn.execute("""
-                    UPDATE players SET cultivation = ?, lifespan = ?,
-                        cultivation_overflow = 0,
-                        cultivating_until = NULL, cultivating_years = NULL,
-                        dual_partner_id = NULL,
-                        last_active = ?
-                    WHERE discord_id = ?
-                """, (nc, nl, now, puid))
-            conn.commit()
-
-        # Best-effort notify partner via DM
-        try:
-            user = await self.bot.fetch_user(int(partner_id))
-            needed_b = cultivation_needed(partner["realm"])
+        else:
             msg = (
                 f"✦ 双修中止 ✦\n"
-                f"因对方提前停止，你也已出关。\n"
-                f"实际修炼 **{b_years} 年**，获得修为 **+{b_gain}**。\n"
-                f"修为进度：{b_cult}/{needed_b}　寿元剩余：{b_life} 年"
+                f"你停止了双修，**双方已同时出关**。\n\n"
+                f"你（**{result['name']}**）：实际修炼 **{result['actual_years']} 年**，修为 **+{result['gain']}**，进度 {result['cultivation']}/{result['needed']}，寿元 {result['lifespan']} 年\n"
+                f"对方（**{result['partner_name']}**）：实际修炼 **{result['partner_years']} 年**，修为 **+{result['partner_gain']}**，寿元 {result['partner_lifespan']} 年"
             )
-            await user.send(msg)
+            
+            try:
+                user = await self.bot.fetch_user(int(result['partner_id']))
+                partner_msg = (
+                    f"✦ 双修中止 ✦\n"
+                    f"因对方提前停止，你也已出关。\n"
+                    f"实际修炼 **{result['partner_years']} 年**，获得修为 **+{result['partner_gain']}**。\n"
+                    f"修为进度：{result['partner_cultivation']}/{result['partner_needed']}　寿元剩余：{result['partner_lifespan']} 年"
+                )
+                await user.send(partner_msg)
+            except Exception:
+                pass
+        
+        await interaction.followup.send(f"{interaction.user.mention} {msg}")
+
+    async def _stop_cultivation_with_pair(self, uid: str, now: float, actor_name: str = "") -> str | None:
+        result = await async_stop_cultivation(uid)
+        
+        if not result["success"]:
+            return None
+        
+        if not result["is_dual"]:
+            return (
+                f"**{result['name']}** 退出闭关。\n"
+                f"实际修炼 **{result['actual_years']} 年**，获得修为 **+{result['gain']}**。\n"
+                f"修为进度：{result['cultivation']}/{result['needed']}　寿元剩余：{result['lifespan']} 年"
+            )
+        
+        try:
+            user = await self.bot.fetch_user(int(result['partner_id']))
+            partner_msg = (
+                f"✦ 双修中止 ✦\n"
+                f"因对方提前停止，你也已出关。\n"
+                f"实际修炼 **{result['partner_years']} 年**，获得修为 **+{result['partner_gain']}**。\n"
+                f"修为进度：{result['partner_cultivation']}/{result['partner_needed']}　寿元剩余：{result['partner_lifespan']} 年"
+            )
+            await user.send(partner_msg)
         except Exception:
             pass
-
-        needed_a = cultivation_needed(player["realm"])
+        
         return (
             f"✦ 双修中止 ✦\n"
             f"你停止了双修，**双方已同时出关**。\n\n"
-            f"你（**{player['name']}**）：实际修炼 **{a_years} 年**，修为 **+{a_gain}**，进度 {a_cult}/{needed_a}，寿元 {a_life} 年\n"
-            f"对方（**{partner['name']}**）：实际修炼 **{b_years} 年**，修为 **+{b_gain}**，寿元 {b_life} 年"
+            f"你（**{result['name']}**）：实际修炼 **{result['actual_years']} 年**，修为 **+{result['gain']}**，进度 {result['cultivation']}/{result['needed']}，寿元 {result['lifespan']} 年\n"
+            f"对方（**{result['partner_name']}**）：实际修炼 **{result['partner_years']} 年**，修为 **+{result['partner_gain']}**，寿元 {result['partner_lifespan']} 年"
         )
 
     @commands.hybrid_command(name="c", aliases=["h"], description="主菜单/创建角色：有角色则打开主菜单，无角色则进入创建流程")
@@ -636,6 +520,18 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             embed.add_field(name="逃跑成功率", value=f"+{player['escape_rate']}%", inline=True)
         if player.get("has_bahongchen"):
             embed.add_field(name="奇遇", value="阴阳两界 · 已触发", inline=False)
+        from utils.combat import calc_power, calc_escape_rate
+        power = calc_power(player)
+        escape_pct = calc_escape_rate(player) * 100
+        embed.add_field(name="综合战力", value=f"{power:.1f}", inline=True)
+        embed.add_field(name="逃跑成功率", value=f"{escape_pct:.1f}%", inline=True)
+        alchemy_level = player.get("alchemy_level", 0)
+        if alchemy_level > 0:
+            from utils.alchemy import ALCHEMY_EXP_THRESHOLDS
+            alchemy_exp = player.get("alchemy_exp", 0)
+            next_exp = ALCHEMY_EXP_THRESHOLDS[alchemy_level + 1] if alchemy_level < 9 and alchemy_level + 1 < len(ALCHEMY_EXP_THRESHOLDS) else None
+            exp_str = f"{alchemy_exp} / {next_exp}" if next_exp else f"{alchemy_exp}（满级）"
+            embed.add_field(name=f"炼丹师 {alchemy_level} 品", value=f"经验 {exp_str}", inline=False)
         with get_conn() as conn:
             city_rows = conn.execute(
                 "SELECT discord_id, name, realm, cultivation FROM players "
@@ -832,93 +728,29 @@ class CultivationCog(commands.Cog, name="Cultivation"):
                        view=DualCultivateInviteView(self, ctx.author, target, multiplier, both_virgin))
 
     async def do_dual_cultivate(self, interaction, inviter, target, multiplier, both_virgin):
-        import json
-        now = time.time()
         inv_uid = str(inviter.id)
         tgt_uid = str(target.id)
-        inv_p = self._get_player(inv_uid)
-        tgt_p = self._get_player(tgt_uid)
-        if not inv_p or not tgt_p:
-            return await interaction.followup.send("双修失败：角色数据异常。")
-        cooldown_secs = years_to_seconds(2)
-        for p, name in [(inv_p, inviter.display_name), (tgt_p, target.display_name)]:
-            if p["lifespan"] < 1:
-                return await interaction.followup.send(f"双修失败：**{name}** 寿元不足。")
-            if p["last_dual_cultivate"] and now - p["last_dual_cultivate"] < cooldown_secs:
-                return await interaction.followup.send(f"双修失败：**{name}** 冷却未结束。")
-            if p["cultivating_until"] and now < p["cultivating_until"]:
-                return await interaction.followup.send(f"双修失败：**{name}** 正在闭关。")
-
-        inv_virgin = bool(inv_p["is_virgin"])
-        tgt_virgin = bool(tgt_p["is_virgin"])
-        both_virgin = inv_virgin and tgt_virgin
-        if both_virgin:
-            multiplier = random.uniform(10, 20)
-        elif inv_virgin or tgt_virgin:
-            multiplier = 5.0
-        else:
-            multiplier = 1.2
-
-        years = 1
-        cultivating_until = now + years_to_seconds(years)
-
-        def _calc(p):
-            base = calc_cultivation_gain(years, p["comprehension"], p["spirit_root_type"])
-            bonus = get_cultivation_bonus(str(p["discord_id"]), p["current_city"], p.get("cave"))
-            return int(base * (1 + bonus) * multiplier)
-
-        inv_gain = _calc(inv_p)
-        tgt_gain = _calc(tgt_p)
-        with get_conn() as conn:
-            for p, gain, uid in [(inv_p, inv_gain, inv_uid), (tgt_p, tgt_gain, tgt_uid)]:
-                partner_id = tgt_uid if uid == inv_uid else inv_uid
-                new_life = p["lifespan"] - years
-                conn.execute("""
-                    UPDATE players SET lifespan = ?, cultivation_overflow = ?,
-                        cultivating_until = ?, cultivating_years = ?,
-                        last_dual_cultivate = ?, dual_partner_id = ?, is_virgin = 0, last_active = ?
-                    WHERE discord_id = ?
-                """, (new_life, gain, cultivating_until, years, now, partner_id, now, uid))
-            conn.commit()
-
-        inv_needed = cultivation_needed(inv_p["realm"])
-        tgt_needed = cultivation_needed(tgt_p["realm"])
-        if both_virgin:
-            gender_word_inviter = "处男" if inv_virgin and inv_p["gender"] == "男" else "处女"
-            gender_word_target = "处男" if tgt_virgin and tgt_p["gender"] == "男" else "处女"
-            flavor = (
-                "灵气缠绵，呼吸交织，两道身影在朦胧的灵雾中渐渐靠近……\n"
-                "初尝禁果，羞意难掩，却又欲罢不能。\n"
-                "阴阳之力在体内激荡翻涌，如决堤之水，修为暴涨。\n\n"
-                f"💮 **{inviter.display_name}** 失去了{gender_word_inviter}状态\n"
-                f"💮 **{target.display_name}** 失去了{gender_word_target}状态\n\n"
-                f"修为暴涨（**{multiplier:.1f}倍**）"
-            )
-        elif inv_virgin or tgt_virgin:
-            virgin_one = inviter.display_name if inv_virgin else target.display_name
-            gender_word = "处男" if (inv_virgin and inv_p["gender"] == "男") or (tgt_virgin and tgt_p["gender"] == "男") else "处女"
-            flavor = (
-                "灵气流转，肌肤相触，一股陌生而炽热的感觉涌遍全身……\n"
-                "懵懂与悸动交织，那道防线悄然崩塌。\n"
-                "阴阳之力借此契机奔涌而出，修为大幅提升。\n\n"
-                f"💮 **{virgin_one}** 失去了{gender_word}状态\n\n"
-                "修为大增（**5倍**）"
-            )
-        else:
-            flavor = (
-                "两道灵识相互感应，阴阳之气缓缓流转交融。\n"
-                "虽无初次的惊涛骇浪，却也有一番绵绵细水的滋味。\n\n"
-                "修为略有提升（**1.2倍**）"
-            )
-        embed = discord.Embed(title="✦ 双修 ✦",
-                              description=f"{flavor}\n\n双修持续 **1 游戏年**（现实 2 小时）。",
-                              color=discord.Color.pink())
-        embed.add_field(name=inviter.display_name,
-                        value=f"修为 +{inv_gain}（{inv_p['cultivation']}/{inv_needed} → {inv_p['cultivation']+inv_gain}/{inv_needed}）",
-                        inline=False)
-        embed.add_field(name=target.display_name,
-                        value=f"修为 +{tgt_gain}（{tgt_p['cultivation']}/{tgt_needed} → {tgt_p['cultivation']+tgt_gain}/{tgt_needed}）",
-                        inline=False)
+        
+        result = await start_dual_cultivation(inv_uid, tgt_uid)
+        
+        if not result["success"]:
+            return await interaction.followup.send(f"双修失败：{result['message']}")
+        
+        embed = discord.Embed(
+            title="✦ 双修 ✦",
+            description=f"{result['flavor']}\n\n双修持续 **1 游戏年**（现实 2 小时）。",
+            color=discord.Color.pink()
+        )
+        embed.add_field(
+            name=inviter.display_name,
+            value=f"修为 +{result['inviter_gain']}（{result['inviter_cultivation']}/{result['inviter_needed']} → {result['inviter_cultivation']+result['inviter_gain']}/{result['inviter_needed']}）",
+            inline=False
+        )
+        embed.add_field(
+            name=target.display_name,
+            value=f"修为 +{result['target_gain']}（{result['target_cultivation']}/{result['target_needed']} → {result['target_cultivation']+result['target_gain']}/{result['target_needed']}）",
+            inline=False
+        )
         await interaction.followup.send(embed=embed)
 
     @tasks.loop(minutes=1)

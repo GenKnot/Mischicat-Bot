@@ -32,7 +32,7 @@ class AlchemyCog(commands.Cog, name="Alchemy"):
         uid = str(ctx.author.id)
         player = await _get_player(uid)
         if not player:
-            await ctx.send("你还没有角色，请先使用 `cat!开始` 创建角色。")
+            await ctx.send(f"你还没有角色，请先使用 `{COMMAND_PREFIX}开始` 创建角色。")
             return
         if player.is_dead:
             await ctx.send("你已坐化，无法炼丹。")
@@ -40,7 +40,7 @@ class AlchemyCog(commands.Cog, name="Alchemy"):
         if player.alchemy_level == 0:
             await ctx.send(
                 "你尚未入门炼丹之道。\n"
-                "使用 `cat!学炼丹` 拜师入门，成为一品炼丹师后方可开炉。"
+                f"使用 `{COMMAND_PREFIX}学炼丹` 拜师入门，成为一品炼丹师后方可开炉。"
             )
             return
 
@@ -92,7 +92,7 @@ class AlchemyCog(commands.Cog, name="Alchemy"):
         daily = player.alchemy_daily_count
 
         if level == 0:
-            await ctx.send("你尚未入门炼丹，使用 `cat!学炼丹` 拜师入门。")
+            await ctx.send(f"你尚未入门炼丹，使用 `{COMMAND_PREFIX}学炼丹` 拜师入门。")
             return
 
         next_exp = ALCHEMY_EXP_THRESHOLDS[level + 1] if level < 9 and level + 1 < len(ALCHEMY_EXP_THRESHOLDS) else None

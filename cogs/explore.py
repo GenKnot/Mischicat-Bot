@@ -451,6 +451,27 @@ class ExploreCog(commands.Cog, name="Explore"):
             embed=embed,
             view=ExploreView(ctx.author, event, player, self)
         )
+    
+    @commands.command(name="重置探险")
+    async def reset_explore(self, ctx, target_id: str = None):
+        ADMIN_ID = "304758476448595970"
+        if str(ctx.author.id) != ADMIN_ID:
+            return
+        
+        uid = target_id or str(ctx.author.id)
+        
+        with get_conn() as conn:
+            conn.execute(
+                "UPDATE players SET explore_count = 0, explore_reset_year = 0 WHERE discord_id = ?",
+                (uid,)
+            )
+            conn.commit()
+        
+        player = _get_player(uid)
+        if player:
+            await ctx.send(f"已重置 **{player['name']}** 的探险次数。")
+        else:
+            await ctx.send(f"已重置探险次数（用户ID: {uid}）。")
 
 
 async def setup(bot):

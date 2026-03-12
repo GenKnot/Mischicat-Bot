@@ -18,7 +18,8 @@ def _get_event_hint() -> str:
     return f"「{row['title']}」即将开始，敬请关注公告频道"
 
 
-def _build_menu_embed(has_dual: bool = False, event_hint: str = "") -> discord.Embed:
+def _build_gameplay_description(has_dual: bool = False, event_hint: str = "") -> str:
+    """仅玩法说明文案，供 cat!c 使用。"""
     if not event_hint:
         event_hint = _get_event_hint()
     dual_section = (
@@ -27,53 +28,62 @@ def _build_menu_embed(has_dual: bool = False, event_hint: str = "") -> discord.E
         "· 双方皆为清白之身时修为暴涨（10-20倍），一方清白5倍，否则1.2倍\n"
         "· 双修冷却 2 游戏年，闭关中无法双修"
     ) if has_dual else ""
+    return (
+        "天地初开，灵气充盈，万物皆可修仙。\n"
+        "踏入此道，以寿元换修为，历经炼气、筑基、结丹……直至飞升成仙。\n\n"
+        "**基本规则**\n"
+        "· 现实 2 小时 = 游戏 1 年，寿元随时间流逝\n"
+        "· 修炼消耗寿元，换取修为积累\n"
+        "· 修为积满可尝试突破，失败有代价\n"
+        "· 寿元归零，角色坐化，需重新创建\n"
+        "· 超过 2 年未行动，自动进入修炼状态\n\n"
+        "**探险系统**\n"
+        f"· `{COMMAND_PREFIX}探险` 随机触发事件，每 5 游戏年可探险 8 次\n"
+        "· 12% 概率触发稀有事件，奖励丰厚\n"
+        "· 所在城市与地区影响事件池，加入宗门后有专属事件\n\n"
+        "**移动与世界**\n"
+        "· 天下共 30 座城市，分布于东域、南域、西域、北域、中州\n"
+        f"· 点击「移动」按钮或使用 `{COMMAND_PREFIX}移动 [城市名]` 前往目的地\n"
+        "· 闭关期间无法移动\n\n"
+        "**居所与洞府**\n"
+        f"· 声望 ≥ 300 可使用 `{COMMAND_PREFIX}买房` 在当前城市置业，提升修炼速度与探险次数\n"
+        f"· 声望 ≥ 600 可使用 `{COMMAND_PREFIX}开辟洞府 [秘地名]` 开辟野外洞府，加成更强且全局生效\n"
+        f"· 使用 `{COMMAND_PREFIX}我的居所` 查看已有居所与加成详情\n\n"
+        "**宗门系统**\n"
+        "· 满足条件后可加入宗门，获得专属事件与功法加成\n"
+        f"· 使用 `{COMMAND_PREFIX}宗门列表` 查看天下宗门，`{COMMAND_PREFIX}加入宗门 [名]` 加入\n"
+        f"· 加入后自动获得全部3本功法，`{COMMAND_PREFIX}门派功法` 可补领遗漏\n\n"
+        "**功法系统**\n"
+        "· 最多装备5本功法，装备后获得属性加成\n"
+        f"· `{COMMAND_PREFIX}我的功法` 查看功法　`{COMMAND_PREFIX}装备功法 [名]` 装备/卸下\n"
+        f"· `{COMMAND_PREFIX}修炼功法 [名]` 消耗灵石与寿元提升功法阶段（入门→破限）\n"
+        f"· `{COMMAND_PREFIX}功法属性` 查看当前装备功法的总属性加成"
+        + dual_section
+        + (
+            "\n\n**公共事件**\n"
+            f"· {event_hint}\n"
+            f"· 点击「公共事件」按钮或使用 `{COMMAND_PREFIX}公共事件` 查看详情"
+        )
+    )
+
+
+def _build_menu_embed(has_dual: bool = False, event_hint: str = "", gameplay_only: bool = False) -> discord.Embed:
+    """主菜单 embed。gameplay_only=True 时仅玩法（cat!c），否则含完整指令速查（cat!h）。"""
+    description = _build_gameplay_description(has_dual, event_hint)
     embed = discord.Embed(
         title="✦ 修仙长生路 ✦",
-        description=(
-            "天地初开，灵气充盈，万物皆可修仙。\n"
-            "踏入此道，以寿元换修为，历经炼气、筑基、结丹……直至飞升成仙。\n\n"
-            "**基本规则**\n"
-            "· 现实 2 小时 = 游戏 1 年，寿元随时间流逝\n"
-            "· 修炼消耗寿元，换取修为积累\n"
-            "· 修为积满可尝试突破，失败有代价\n"
-            "· 寿元归零，角色坐化，需重新创建\n"
-            "· 超过 2 年未行动，自动进入修炼状态\n\n"
-            "**探险系统**\n"
-            f"· `{COMMAND_PREFIX}探险` 随机触发事件，每 5 游戏年可探险 8 次\n"
-            "· 12% 概率触发稀有事件，奖励丰厚\n"
-            "· 所在城市与地区影响事件池，加入宗门后有专属事件\n\n"
-            "**移动与世界**\n"
-            "· 天下共 30 座城市，分布于东域、南域、西域、北域、中州\n"
-            f"· 点击「移动」按钮或使用 `{COMMAND_PREFIX}移动 [城市名]` 前往目的地\n"
-            "· 闭关期间无法移动\n\n"
-            "**居所与洞府**\n"
-            f"· 声望 ≥ 300 可使用 `{COMMAND_PREFIX}买房` 在当前城市置业，提升修炼速度与探险次数\n"
-            f"· 声望 ≥ 600 可使用 `{COMMAND_PREFIX}开辟洞府 [秘地名]` 开辟野外洞府，加成更强且全局生效\n"
-            f"· 使用 `{COMMAND_PREFIX}我的居所` 查看已有居所与加成详情\n\n"
-            "**宗门系统**\n"
-            "· 满足条件后可加入宗门，获得专属事件与功法加成\n"
-            f"· 使用 `{COMMAND_PREFIX}宗门列表` 查看天下宗门，`{COMMAND_PREFIX}加入宗门 [名]` 加入\n"
-            f"· 加入后自动获得全部3本功法，`{COMMAND_PREFIX}门派功法` 可补领遗漏\n\n"
-            "**功法系统**\n"
-            "· 最多装备5本功法，装备后获得属性加成\n"
-            f"· `{COMMAND_PREFIX}我的功法` 查看功法　`{COMMAND_PREFIX}装备功法 [名]` 装备/卸下\n"
-            f"· `{COMMAND_PREFIX}修炼功法 [名]` 消耗灵石与寿元提升功法阶段（入门→破限）\n"
-            f"· `{COMMAND_PREFIX}功法属性` 查看当前装备功法的总属性加成"
-            + dual_section
-            + (
-                "\n\n**公共事件**\n"
-                f"· {event_hint}\n"
-                f"· 点击「公共事件」按钮或使用 `{COMMAND_PREFIX}公共事件` 查看详情"
-            )
-        ),
+        description=description,
         color=discord.Color.teal(),
     )
+    if gameplay_only:
+        embed.set_footer(text="天道有常，长生路远，望道友珍重。")
+        return embed
     # 命令速查（前缀缩写仅对消息命令生效；斜杠命令请用原名）
     embed.add_field(
         name="指令速查（前缀缩写）",
         value=(
             f"说明：缩写仅对 `{COMMAND_PREFIX}` 前缀命令生效，`/` 斜杠命令仍使用中文原名。\n"
-            f"主入口：`{COMMAND_PREFIX}c` / `{COMMAND_PREFIX}h`（无角色=创建；有角色=主菜单）"
+            f"· `{COMMAND_PREFIX}c`：玩法说明（本菜单）　· `{COMMAND_PREFIX}h`：完整指令列表"
         ),
         inline=False,
     )
@@ -485,7 +495,7 @@ class MenuButton(discord.ui.Button):
                         ).fetchall()
                     city_players = [dict(r) for r in rows]
                 await interaction.followup.send(
-                    embed=_build_menu_embed(has_dual),
+                    embed=_build_menu_embed(has_dual, gameplay_only=True),
                     view=MainMenuView(interaction.user, has_player, can_bt, cog, player, city_players)
                 )
         except Exception as e:

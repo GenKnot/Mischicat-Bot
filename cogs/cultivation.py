@@ -440,8 +440,8 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             f"对方（**{result['partner_name']}**）：实际修炼 **{result['partner_years']} 年**，修为 **+{result['partner_gain']}**，寿元 {result['partner_lifespan']} 年"
         )
 
-    @commands.hybrid_command(name="c", aliases=["h"], description="主菜单/创建角色：有角色则打开主菜单，无角色则进入创建流程")
-    async def menu(self, ctx):
+    async def _send_menu(self, ctx, *, gameplay_only: bool):
+        """有角色时发送主菜单（玩法页或完整指令页），无角色则进入创建流程。"""
         import json
         uid = str(ctx.author.id)
         player = self._get_player(uid)
@@ -469,7 +469,16 @@ class CultivationCog(commands.Cog, name="Cultivation"):
                     (player["current_city"], uid)
                 ).fetchall()
             city_players = [dict(r) for r in rows]
-        await ctx.send(embed=_build_menu_embed(has_dual), view=MainMenuView(ctx.author, has_player, can_bt, self, player, city_players))
+        embed = _build_menu_embed(has_dual, gameplay_only=gameplay_only)
+        await ctx.send(embed=embed, view=MainMenuView(ctx.author, has_player, can_bt, self, player, city_players))
+
+    @commands.hybrid_command(name="c", description="主菜单（仅玩法说明）：有角色则打开主菜单，无角色则进入创建流程")
+    async def menu_c(self, ctx):
+        await self._send_menu(ctx, gameplay_only=True)
+
+    @commands.hybrid_command(name="h", description="完整指令列表：有角色则打开主菜单与指令速查，无角色则进入创建流程")
+    async def menu_h(self, ctx):
+        await self._send_menu(ctx, gameplay_only=False)
 
     async def _send_profile_ctx(self, ctx):
         uid = str(ctx.author.id)

@@ -68,11 +68,13 @@ class CheckinView(discord.ui.View):
 
         async def _back(inter: discord.Interaction):
             from utils.views.city import CityMenuView, _city_menu_embed
-            from utils.db import get_conn
+            from sqlalchemy import text
+            from utils.db_async import AsyncSessionLocal
             uid = str(inter.user.id)
-            with get_conn() as conn:
-                player = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
-            await inter.response.edit_message(embed=_city_menu_embed(player), view=CityMenuView(inter.user, player, cog))
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid})
+                player = dict(result.fetchone()._mapping)
+            await inter.response.edit_message(embed=await _city_menu_embed(player), view=CityMenuView(inter.user, player, cog))
 
         back_btn.callback = _back
         done_view.add_item(back_btn)

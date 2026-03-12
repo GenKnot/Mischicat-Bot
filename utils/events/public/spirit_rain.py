@@ -3,10 +3,11 @@ import time
 
 import discord
 
-from utils.db import get_conn, give_equipment
 from utils.combat import calc_power
 from utils.character import years_to_seconds
 from utils.equipment import generate_equipment
+from utils.db_async import AsyncSessionLocal
+from sqlalchemy import text
 
 META = {
     "type": "spirit_rain",
@@ -24,46 +25,49 @@ def _pick_city() -> str:
     return random.choice(CITIES)["name"]
 
 
-def _get_participants(event_id: str) -> list[dict]:
-    with get_conn() as conn:
-        rows = conn.execute("""
+async def _get_participants(event_id: str) -> list[dict]:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(text("""
             SELECT ep.discord_id, ep.contribution, ep.joined_at, ep.activity,
                    p.name, p.realm, p.current_city, p.party_id,
                    p.cultivating_until, p.gathering_until, p.active_quest
             FROM public_event_participants ep
             JOIN players p ON ep.discord_id = p.discord_id
-            WHERE ep.event_id = ?
+            WHERE ep.event_id = :event_id
             ORDER BY ep.contribution DESC
-        """, (event_id,)).fetchall()
-    return [dict(r) for r in rows]
+        """), {"event_id": event_id})
+        rows = result.fetchall()
+    return [dict(r._mapping) for r in rows]
 
 
-def _get_defense_participants(event_id: str) -> list[dict]:
-    with get_conn() as conn:
-        rows = conn.execute("""
+async def _get_defense_participants(event_id: str) -> list[dict]:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(text("""
             SELECT ep.discord_id, ep.contribution, ep.joined_at, ep.activity,
                    p.name, p.realm, p.current_city, p.party_id,
                    p.cultivating_until, p.gathering_until, p.active_quest
             FROM public_event_participants ep
             JOIN players p ON ep.discord_id = p.discord_id
-            WHERE ep.event_id = ? AND ep.activity = 'defense'
+            WHERE ep.event_id = :event_id AND ep.activity = 'defense'
             ORDER BY ep.contribution DESC
-        """, (event_id,)).fetchall()
-    return [dict(r) for r in rows]
+        """), {"event_id": event_id})
+        rows = result.fetchall()
+    return [dict(r._mapping) for r in rows]
 
 
-def _get_idle_in_city(city: str, participant_ids: set) -> list[dict]:
+async def _get_idle_in_city(city: str, participant_ids: set) -> list[dict]:
     now = time.time()
-    with get_conn() as conn:
-        rows = conn.execute("""
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(text("""
             SELECT discord_id, name, realm
             FROM players
-            WHERE current_city = ? AND is_dead = 0
-              AND (cultivating_until IS NULL OR cultivating_until <= ?)
-              AND (gathering_until IS NULL OR gathering_until <= ?)
+            WHERE current_city = :city AND is_dead = 0
+              AND (cultivating_until IS NULL OR cultivating_until <= :now)
+              AND (gathering_until IS NULL OR gathering_until <= :now)
               AND active_quest IS NULL
-        """, (city, now, now)).fetchall()
-    return [dict(r) for r in rows if r["discord_id"] not in participant_ids]
+        """), {"city": city, "now": now})
+        rows = result.fetchall()
+    return [dict(r._mapping) for r in rows if r[0] not in participant_ids]
 
 
 async def on_trigger(bot, channel, event_id: str, city: str):
@@ -84,12 +88,12 @@ async def on_trigger(bot, channel, event_id: str, city: str):
     view = SpiritRainView(event_id, city)
     msg = await channel.send(embed=embed, view=view)
 
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE public_events SET message_id = ? WHERE event_id = ?",
-            (str(msg.id), event_id)
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            text("UPDATE public_events SET message_id = :mid WHERE event_id = :eid"),
+            {"mid": str(msg.id), "eid": event_id}
         )
-        conn.commit()
+        await session.commit()
 
 
 async def on_settle(bot, channel, event: dict):
@@ -99,17 +103,16 @@ async def on_settle(bot, channel, event: dict):
     city = data.get("city", "未知城市")
     has_beast_tide = data.get("beast_tide", False)
 
-    participants = _get_participants(event_id)
+    participants = await _get_participants(event_id)
     participant_ids = {p["discord_id"] for p in participants}
-    defense_participants = _get_defense_participants(event_id)
+    defense_participants = await _get_defense_participants(event_id)
 
-    now = time.time()
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE public_events SET status = 'ended' WHERE event_id = ?",
-            (event_id,)
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            text("UPDATE public_events SET status = 'ended' WHERE event_id = :eid"),
+            {"eid": event_id}
         )
-        conn.commit()
+        await session.commit()
 
     if has_beast_tide:
         await _settle_beast_tide(bot, channel, event_id, city, defense_participants, participants, participant_ids)
@@ -135,12 +138,12 @@ async def _settle_spirit_rain_only(channel, city: str, participants: list[dict])
     for p in defenders:
         stones = random.randint(100, 300)
         rep = 5
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE players SET spirit_stones = spirit_stones + ?, reputation = reputation + ? WHERE discord_id = ?",
-                (stones, rep, p["discord_id"])
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET spirit_stones = spirit_stones + :s, reputation = reputation + :r WHERE discord_id = :uid"),
+                {"s": stones, "r": rep, "uid": p["discord_id"]}
             )
-            conn.commit()
+            await session.commit()
         defense_lines.append(f"· **{p['name']}** — 灵石 +{stones}，声望 +{rep}")
 
     embed = discord.Embed(
@@ -167,8 +170,10 @@ async def _settle_beast_tide(bot, channel, event_id: str, city: str, participant
     if not channel:
         return
 
+    from utils.equipment_db import give_equipment
+
     defenders = [p for p in participants if p.get("activity") == "defense" and p["current_city"] == city]
-    idle_players = _get_idle_in_city(city, participant_ids)
+    idle_players = await _get_idle_in_city(city, participant_ids)
 
     medal = ["🥇", "🥈", "🥉"]
     result_lines = []
@@ -180,27 +185,36 @@ async def _settle_beast_tide(bot, channel, event_id: str, city: str, participant
             rep = 50
             eq1 = generate_equipment(tier=_get_tier(p["realm"]), quality="稀有")
             eq2 = generate_equipment(tier=_get_tier(p["realm"]), quality="稀有")
-            give_equipment(uid, eq1)
-            give_equipment(uid, eq2)
-            with get_conn() as conn:
-                conn.execute("UPDATE players SET spirit_stones = spirit_stones + ?, reputation = reputation + ? WHERE discord_id = ?", (stones, rep, uid))
-                conn.commit()
+            await give_equipment(uid, eq1)
+            await give_equipment(uid, eq2)
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("UPDATE players SET spirit_stones = spirit_stones + :s, reputation = reputation + :r WHERE discord_id = :uid"),
+                    {"s": stones, "r": rep, "uid": uid}
+                )
+                await session.commit()
             result_lines.append(f"{medal[0]} **{p['name']}**（贡献 {p['contribution']}）— 灵石 +{stones}，声望 +{rep}，获得 2件稀有装备")
         elif i in (1, 2):
             stones = random.randint(1500, 2500)
             rep = 30
             eq = generate_equipment(tier=_get_tier(p["realm"]), quality="稀有")
-            give_equipment(uid, eq)
-            with get_conn() as conn:
-                conn.execute("UPDATE players SET spirit_stones = spirit_stones + ?, reputation = reputation + ? WHERE discord_id = ?", (stones, rep, uid))
-                conn.commit()
+            await give_equipment(uid, eq)
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("UPDATE players SET spirit_stones = spirit_stones + :s, reputation = reputation + :r WHERE discord_id = :uid"),
+                    {"s": stones, "r": rep, "uid": uid}
+                )
+                await session.commit()
             result_lines.append(f"{medal[i]} **{p['name']}**（贡献 {p['contribution']}）— 灵石 +{stones}，声望 +{rep}，获得 1件稀有装备")
         else:
             stones = random.randint(300, 800)
             rep = 10
-            with get_conn() as conn:
-                conn.execute("UPDATE players SET spirit_stones = spirit_stones + ?, reputation = reputation + ? WHERE discord_id = ?", (stones, rep, uid))
-                conn.commit()
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("UPDATE players SET spirit_stones = spirit_stones + :s, reputation = reputation + :r WHERE discord_id = :uid"),
+                    {"s": stones, "r": rep, "uid": uid}
+                )
+                await session.commit()
             if i < 8:
                 result_lines.append(f"· **{p['name']}**（贡献 {p['contribution']}）— 灵石 +{stones}，声望 +{rep}")
 
@@ -235,12 +249,12 @@ async def _settle_beast_tide(bot, channel, event_id: str, city: str, participant
     for p in idle_players:
         if random.random() < 0.30:
             loss = random.randint(5, 15)
-            with get_conn() as conn:
-                conn.execute(
-                    "UPDATE players SET lifespan = MAX(1, lifespan - ?) WHERE discord_id = ?",
-                    (loss, p["discord_id"])
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("UPDATE players SET lifespan = MAX(1, lifespan - :loss) WHERE discord_id = :uid"),
+                    {"loss": loss, "uid": p["discord_id"]}
                 )
-                conn.commit()
+                await session.commit()
             loss_list.append((p["name"], p["realm"], loss))
 
     if not loss_list:
@@ -333,22 +347,30 @@ async def _handle_activity(interaction: discord.Interaction, event_id: str, city
     uid = str(interaction.user.id)
     now = time.time()
 
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid}
+        )
+        row = result.fetchone()
         if not row:
             return await interaction.followup.send("尚未踏入修仙之路。", ephemeral=True)
-        player = dict(row)
-        event_row = conn.execute(
-            "SELECT * FROM public_events WHERE event_id = ? AND status = 'active'", (event_id,)
-        ).fetchone()
+        player = dict(row._mapping)
+
+        event_result = await session.execute(
+            text("SELECT * FROM public_events WHERE event_id = :eid AND status = 'active'"),
+            {"eid": event_id}
+        )
+        event_row = event_result.fetchone()
         if not event_row:
             return await interaction.followup.send("此事件已结束。", ephemeral=True)
-        existing_rows = conn.execute(
-            "SELECT activity, joined_at FROM public_event_participants WHERE event_id = ? AND discord_id = ? ORDER BY joined_at DESC",
-            (event_id, uid)
-        ).fetchall()
 
-    existing_activities = [dict(r) for r in existing_rows]
+        existing_result = await session.execute(
+            text("SELECT activity, joined_at FROM public_event_participants WHERE event_id = :eid AND discord_id = :uid ORDER BY joined_at DESC"),
+            {"eid": event_id, "uid": uid}
+        )
+        existing_rows = existing_result.fetchall()
+
+    existing_activities = [dict(r._mapping) for r in existing_rows]
     activity_set = {r["activity"] for r in existing_activities}
 
     if player["is_dead"]:
@@ -381,15 +403,15 @@ async def _handle_activity(interaction: discord.Interaction, event_id: str, city
     if activity == "temper" and player.get("physique", 5) < 7:
         return await interaction.followup.send("体魄不足（需≥7），无法承受灵雨淬体。", ephemeral=True)
 
-    with get_conn() as conn:
-        try:
-            conn.execute("""
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("""
                 INSERT INTO public_event_participants (event_id, discord_id, joined_at, contribution, activity)
-                VALUES (?, ?, ?, 0, ?)
-            """, (event_id, uid, now, activity))
-            conn.commit()
-        except Exception:
-            return await interaction.followup.send("操作失败，请稍后再试。", ephemeral=True)
+                VALUES (:eid, :uid, :now, 0, :activity)
+            """), {"eid": event_id, "uid": uid, "now": now, "activity": activity})
+            await session.commit()
+    except Exception:
+        return await interaction.followup.send("操作失败，请稍后再试。", ephemeral=True)
 
     msg = ""
 
@@ -397,7 +419,7 @@ async def _handle_activity(interaction: discord.Interaction, event_id: str, city
         stones = random.randint(150, 400)
         items_gained = []
         from utils.items import ITEMS
-        from utils.db import add_item
+        from utils.inventory import add_item
         if random.random() < 0.65:
             rarity_weights = {"普通": 70, "稀有": 25, "珍贵": 4, "绝世": 1}
             herb_pool = [(k, v) for k, v in ITEMS.items() if v.get("type") == "herb"]
@@ -407,31 +429,38 @@ async def _handle_activity(interaction: discord.Interaction, event_id: str, city
             picked = list(dict.fromkeys(picked))
             for item in picked:
                 qty = 1 if ITEMS[item].get("rarity") in ("珍贵", "绝世") else random.randint(1, 2)
-                add_item(uid, item, qty)
+                await add_item(uid, item, qty)
                 items_gained.append(f"{item}×{qty}")
-        with get_conn() as conn:
-            conn.execute("UPDATE players SET spirit_stones = spirit_stones + ? WHERE discord_id = ?", (stones, uid))
-            conn.commit()
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET spirit_stones = spirit_stones + :s WHERE discord_id = :uid"),
+                {"s": stones, "uid": uid}
+            )
+            await session.commit()
         items_str = "、".join(items_gained) if items_gained else "无"
         msg = f"你收集了落地灵晶，获得 **{stones} 灵石**，材料：{items_str}"
-        power = 0
 
     elif activity == "enlighten":
         stat = random.choice(["comprehension", "soul", "fortune"])
         stat_names = {"comprehension": "悟性", "soul": "神识", "fortune": "机缘"}
         gain = 1 if random.random() < 0.15 else 0
         cult_gain = random.randint(80, 200)
-        with get_conn() as conn:
+        async with AsyncSessionLocal() as session:
             if gain:
-                conn.execute(f"UPDATE players SET {stat} = {stat} + 1, cultivation = cultivation + ? WHERE discord_id = ?", (cult_gain, uid))
+                await session.execute(
+                    text(f"UPDATE players SET {stat} = {stat} + 1, cultivation = cultivation + :cg WHERE discord_id = :uid"),
+                    {"cg": cult_gain, "uid": uid}
+                )
             else:
-                conn.execute("UPDATE players SET cultivation = cultivation + ? WHERE discord_id = ?", (cult_gain, uid))
-            conn.commit()
+                await session.execute(
+                    text("UPDATE players SET cultivation = cultivation + :cg WHERE discord_id = :uid"),
+                    {"cg": cult_gain, "uid": uid}
+                )
+            await session.commit()
         if gain:
             msg = f"灵雨中你心有所悟，**{stat_names[stat]} +1**，修为 +{cult_gain}"
         else:
             msg = f"你在灵雨中打坐，修为 +{cult_gain}"
-        power = 0
 
     elif activity == "temper":
         physique_gain = 1 if random.random() < 0.12 else 0
@@ -442,25 +471,33 @@ async def _handle_activity(interaction: discord.Interaction, event_id: str, city
             updates.append("physique = physique + 1")
         if bone_gain:
             updates.append("bone = bone + 1")
-        with get_conn() as conn:
-            conn.execute(f"UPDATE players SET {', '.join(updates)} WHERE discord_id = ?", (uid,))
-            conn.commit()
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text(f"UPDATE players SET {', '.join(updates)} WHERE discord_id = :uid"),
+                {"uid": uid}
+            )
+            await session.commit()
         parts = [f"修为 +{cult_gain}"]
         if physique_gain:
             parts.append("体魄 +1")
         if bone_gain:
             parts.append("根骨 +1")
         msg = "灵雨淬体，" + "，".join(parts)
-        power = 0
 
     elif activity == "defense":
-        power = int(calc_power(player) * random.uniform(0.9, 1.1))
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE public_event_participants SET contribution = ? WHERE event_id = ? AND discord_id = ? AND activity = 'defense'",
-                (power, event_id, uid)
+        power = int(await calc_power(player) * random.uniform(0.9, 1.1))
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE public_event_participants SET contribution = :p WHERE event_id = :eid AND discord_id = :uid AND activity = 'defense'"),
+                {"p": power, "eid": event_id, "uid": uid}
             )
-            conn.commit()
+            await session.commit()
         msg = f"你加入守城队伍！战力贡献：**{power}**"
 
     await interaction.followup.send(msg, ephemeral=True)
+
+
+class SpiritRainEvent:
+    META = META
+    on_trigger = staticmethod(on_trigger)
+    on_settle = staticmethod(on_settle)

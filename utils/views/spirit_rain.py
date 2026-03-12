@@ -3,25 +3,33 @@ import time
 
 import discord
 
-from utils.db import get_conn
+from sqlalchemy import text
+from utils.db_async import AsyncSessionLocal
+from utils.player import get_player, apply_updates, settle_time
 
 
-def _get_active_event() -> dict | None:
+async def _get_active_event() -> dict | None:
     now = time.time()
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM public_events WHERE status = 'active' AND ends_at > ? ORDER BY started_at DESC LIMIT 1",
-            (now,)
-        ).fetchone()
-    return dict(row) if row else None
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text(
+                "SELECT * FROM public_events WHERE status = 'active' AND ends_at > :now ORDER BY started_at DESC LIMIT 1"
+            ),
+            {"now": now},
+        )
+        row = result.fetchone()
+    return dict(row._mapping) if row else None
 
 
-def _get_pending_event() -> dict | None:
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM public_events WHERE status = 'pending' ORDER BY started_at DESC LIMIT 1"
-        ).fetchone()
-    return dict(row) if row else None
+async def _get_pending_event() -> dict | None:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text(
+                "SELECT * FROM public_events WHERE status = 'pending' ORDER BY started_at DESC LIMIT 1"
+            )
+        )
+        row = result.fetchone()
+    return dict(row._mapping) if row else None
 
 
 def _today_trigger_ts() -> float:
@@ -61,26 +69,29 @@ SPIRIT_RAIN_DESC = (
 async def _build_main_menu(interaction: discord.Interaction, cog):
     from utils.views.menu import MainMenuView, _build_menu_embed
     uid = str(interaction.user.id)
-    player = cog._get_player(uid)
+    player = await get_player(uid)
     if player and not player["is_dead"]:
-        updates, _ = cog._settle_time(player)
-        cog._apply_updates(uid, updates)
-        player = cog._get_player(uid)
+        updates, _ = await settle_time(player)
+        await apply_updates(uid, updates)
+        player = await get_player(uid)
     has_player = player is not None and not player["is_dead"]
-    can_bt = has_player and cog._can_breakthrough(player)
+    from utils.player import can_breakthrough as _can_bt
+    can_bt = has_player and _can_bt(player)
     has_dual = has_player and any(
         (t if isinstance(t, str) else t.get("name", "")) == "双修功法"
         for t in json.loads(player["techniques"] or "[]")
     )
     city_players = []
     if has_player:
-        with get_conn() as conn:
-            rows = conn.execute(
-                "SELECT discord_id, name, realm, cultivation FROM players "
-                "WHERE current_city = ? AND is_dead = 0 AND discord_id != ?",
-                (player["current_city"], uid)
-            ).fetchall()
-        city_players = [dict(r) for r in rows]
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text(
+                    "SELECT discord_id, name, realm, cultivation FROM players "
+                    "WHERE current_city = :city AND is_dead = 0 AND discord_id != :uid"
+                ),
+                {"city": player["current_city"], "uid": uid},
+            )
+            city_players = [dict(r._mapping) for r in result.fetchall()]
     embed = _build_menu_embed(has_dual)
     view = MainMenuView(interaction.user, has_player, can_bt, cog, player, city_players)
     return embed, view
@@ -99,11 +110,15 @@ class TravelToEventView(discord.ui.View):
         uid = str(interaction.user.id)
         city = self.city
 
-        with get_conn() as conn:
-            row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT * FROM players WHERE discord_id = :uid"),
+                {"uid": uid},
+            )
+            row = result.fetchone()
             if not row:
                 return await interaction.followup.send("尚未踏入修仙之路。", ephemeral=True)
-            player = dict(row)
+            player = dict(row._mapping)
 
         if player["is_dead"]:
             return await interaction.followup.send("道友已坐化。", ephemeral=True)
@@ -125,19 +140,25 @@ class TravelToEventView(discord.ui.View):
         if player.get("active_quest"):
             return await interaction.followup.send("道友正在执行任务，无法移动。", ephemeral=True)
 
-        with get_conn() as conn:
-            defense_row = conn.execute(
-                "SELECT 1 FROM public_event_participants ep "
-                "JOIN public_events e ON ep.event_id = e.event_id "
-                "WHERE ep.discord_id = ? AND ep.activity = 'defense' AND e.status = 'active'",
-                (uid,)
-            ).fetchone()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text(
+                    "SELECT 1 FROM public_event_participants ep "
+                    "JOIN public_events e ON ep.event_id = e.event_id "
+                    "WHERE ep.discord_id = :uid AND ep.activity = 'defense' AND e.status = 'active'"
+                ),
+                {"uid": uid},
+            )
+            defense_row = result.fetchone()
         if defense_row:
             return await interaction.followup.send("你正在守城，无法离开！坚守阵地直到事件结束。", ephemeral=True)
 
-        with get_conn() as conn:
-            conn.execute("UPDATE players SET current_city = ?, last_active = ? WHERE discord_id = ?", (city, now, uid))
-            conn.commit()
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET current_city = :city, last_active = :now WHERE discord_id = :uid"),
+                {"city": city, "now": now, "uid": uid},
+            )
+            await session.commit()
         await interaction.followup.send(f"已传送至 **{city}**，灵雨即将降临，做好准备！", ephemeral=True)
 
     @discord.ui.button(label="返回主菜单", style=discord.ButtonStyle.secondary)
@@ -176,7 +197,7 @@ class ConfirmStopAndTravelView(discord.ui.View):
                 from utils.character import seconds_to_years, calc_cultivation_gain, get_cultivation_bonus
                 elapsed_years = seconds_to_years(now - player["last_active"])
                 actual_years = min(int(elapsed_years), player.get("cultivating_years") or 0)
-                bonus = get_cultivation_bonus(str(player["discord_id"]), player["current_city"], player.get("cave"))
+                bonus = await get_cultivation_bonus(str(player["discord_id"]), player["current_city"], player.get("cave"))
                 if player.get("pill_buff_until") and now < player["pill_buff_until"]:
                     bonus += 0.5
                 overflow = player.get("cultivation_overflow") or 0
@@ -195,11 +216,15 @@ class ConfirmStopAndTravelView(discord.ui.View):
             updates["gathering_until"] = None
             updates["gathering_type"] = None
 
-        fields = ", ".join(f"{k} = ?" for k in updates)
-        values = list(updates.values()) + [self.uid]
-        with get_conn() as conn:
-            conn.execute(f"UPDATE players SET {fields} WHERE discord_id = ?", values)
-            conn.commit()
+        fields = ", ".join(f"{k} = :{k}" for k in updates)
+        params = dict(updates)
+        params["uid"] = self.uid
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text(f"UPDATE players SET {fields} WHERE discord_id = :uid"),
+                params,
+            )
+            await session.commit()
 
         self.stop()
         await interaction.response.edit_message(
@@ -213,6 +238,13 @@ class ConfirmStopAndTravelView(discord.ui.View):
             return await interaction.response.send_message("这不是你的操作。", ephemeral=True)
         self.stop()
         await interaction.response.edit_message(content="已取消。", view=None)
+
+
+class SpiritRainView(discord.ui.View):
+    def __init__(self, author, pe_cog=None):
+        super().__init__(timeout=120)
+        self.author = author
+        self.pe_cog = pe_cog
 
 
 class _EventDetailButton(discord.ui.Button):
@@ -236,11 +268,12 @@ class _EventDetailButton(discord.ui.Button):
 
         if event["status"] == "active":
             remaining = max(0, event["ends_at"] - time.time())
-            with get_conn() as conn:
-                count = conn.execute(
-                    "SELECT COUNT(*) FROM public_event_participants WHERE event_id = ?",
-                    (event["event_id"],)
-                ).fetchone()[0]
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    text("SELECT COUNT(*) FROM public_event_participants WHERE event_id = :eid"),
+                    {"eid": event["event_id"]},
+                )
+                count = result.scalar()
             embed = discord.Embed(title="✦ 天降灵雨 · 进行中 ✦", description=SPIRIT_RAIN_DESC, color=discord.Color.blue())
             embed.add_field(name="当前城市", value=city, inline=True)
             embed.add_field(name="剩余时间", value=f"{remaining/60:.0f} 分钟", inline=True)
@@ -277,9 +310,9 @@ class _BackToOverviewView(discord.ui.View):
             return await interaction.response.send_message("无法返回。", ephemeral=True)
         from utils.views.public_event_overview import PublicEventOverviewView
         from utils.events.public.wanbao import get_active_auction
-        active = _get_active_event()
-        pending = _get_pending_event() if not active else None
-        auction = get_active_auction()
+        active = await _get_active_event()
+        pending = await _get_pending_event() if not active else None
+        auction = await get_active_auction()
         embed = discord.Embed(
             title="✦ 公共事件 ✦",
             description="天地异象，机缘降临。以下为当前或即将发生的公共事件：",

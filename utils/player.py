@@ -1,5 +1,6 @@
 import time
-from utils.db import get_conn
+from sqlalchemy import text
+from utils.db_async import AsyncSessionLocal, Player
 from utils.character import (
     seconds_to_years, calc_cultivation_gain,
     AUTO_CULTIVATE_THRESHOLD_YEARS, get_cultivation_bonus,
@@ -7,31 +8,35 @@ from utils.character import (
 from utils.realms import cultivation_needed
 
 
-def get_player(discord_id: str):
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (discord_id,)).fetchone()
-        return dict(row) if row else None
+async def get_player(discord_id: str):
+    async with AsyncSessionLocal() as session:
+        row = await session.get(Player, discord_id)
+        if not row:
+            return None
+        return {c.name: getattr(row, c.name) for c in row.__table__.columns}
 
 
-def is_defending(uid: str) -> bool:
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM public_event_participants ep "
-            "JOIN public_events e ON ep.event_id = e.event_id "
-            "WHERE ep.discord_id = ? AND ep.activity = 'defense' AND e.status = 'active'",
-            (uid,)
-        ).fetchone()
-    return row is not None
+async def is_defending(uid: str) -> bool:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text(
+                "SELECT 1 FROM public_event_participants ep "
+                "JOIN public_events e ON ep.event_id = e.event_id "
+                "WHERE ep.discord_id = :uid AND ep.activity = 'defense' AND e.status = 'active'"
+            ),
+            {"uid": uid},
+        )
+        return result.fetchone() is not None
 
 
-def settle_time(player: dict):
+async def settle_time(player: dict):
     now = time.time()
     elapsed_years = seconds_to_years(now - player["last_active"])
     new_lifespan = max(0, player["lifespan"] - int(elapsed_years))
     updates = {"lifespan": new_lifespan, "last_active": now, "cultivation": player["cultivation"]}
     cultivating = player["cultivating_until"] and now < player["cultivating_until"]
     if not cultivating and elapsed_years >= AUTO_CULTIVATE_THRESHOLD_YEARS:
-        bonus = get_cultivation_bonus(player["discord_id"], player["current_city"], player.get("cave"))
+        bonus = await get_cultivation_bonus(player["discord_id"], player["current_city"], player.get("cave"))
         gain = calc_cultivation_gain(int(elapsed_years), player["comprehension"], player["spirit_root_type"])
         from utils.buffs import get_cultivation_speed_bonus
         speed_bonus = get_cultivation_speed_bonus(player)
@@ -42,12 +47,13 @@ def settle_time(player: dict):
     return updates, elapsed_years
 
 
-def apply_updates(discord_id: str, updates: dict):
-    fields = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [discord_id]
-    with get_conn() as conn:
-        conn.execute(f"UPDATE players SET {fields} WHERE discord_id = ?", values)
-        conn.commit()
+async def apply_updates(discord_id: str, updates: dict):
+    async with AsyncSessionLocal() as session:
+        row = await session.get(Player, discord_id)
+        if row:
+            for k, v in updates.items():
+                setattr(row, k, v)
+            await session.commit()
 
 
 def can_breakthrough(player: dict) -> bool:

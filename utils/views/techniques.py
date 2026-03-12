@@ -1,7 +1,9 @@
 import discord
 import json
 import time
-from utils.db import get_conn
+from sqlalchemy import text
+from utils.db_async import AsyncSessionLocal
+from utils.player import get_player
 from utils.sects import (
     TECHNIQUES, TECHNIQUE_STAGES, calc_technique_stat_bonus,
     get_technique_cost, next_stage,
@@ -19,19 +21,13 @@ def _parse_techniques(raw) -> list:
     return result
 
 
-def _save_techniques(uid: str, techniques: list):
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE players SET techniques = ? WHERE discord_id = ?",
-            (json.dumps(techniques, ensure_ascii=False), uid),
+async def _save_techniques(uid: str, techniques: list):
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            text("UPDATE players SET techniques = :t WHERE discord_id = :uid"),
+            {"t": json.dumps(techniques, ensure_ascii=False), "uid": uid},
         )
-        conn.commit()
-
-
-def _get_player(uid: str):
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
-        return dict(row) if row else None
+        await session.commit()
 
 
 def _build_techniques_embed(player: dict) -> discord.Embed:
@@ -150,7 +146,7 @@ class TechniquesView(discord.ui.View):
     @discord.ui.button(label="装备/卸下", style=discord.ButtonStyle.primary, row=0)
     async def toggle_equip(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.response.send_message("尚未创建角色。", ephemeral=True)
 
@@ -176,7 +172,7 @@ class TechniquesView(discord.ui.View):
     @discord.ui.button(label="修炼功法", style=discord.ButtonStyle.success, row=0)
     async def train(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.response.send_message("尚未创建角色。", ephemeral=True)
 
@@ -208,16 +204,18 @@ class TechniquesView(discord.ui.View):
     @discord.ui.button(label="学习功法", style=discord.ButtonStyle.success, row=1)
     async def learn(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.response.send_message("尚未创建角色。", ephemeral=True)
 
-        with get_conn() as conn:
-            rows = conn.execute(
-                "SELECT item_id, quantity FROM inventory WHERE discord_id = ?", (uid,)
-            ).fetchall()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT item_id, quantity FROM inventory WHERE discord_id = :uid"),
+                {"uid": uid},
+            )
+            rows = result.fetchall()
 
-        books = [(r["item_id"], r["quantity"]) for r in rows if r["item_id"] in TECHNIQUES]
+        books = [(r[0], r[1]) for r in rows if r[0] in TECHNIQUES]
         if not books:
             return await interaction.response.send_message("背包中没有可学习的功法书。", ephemeral=True)
 
@@ -236,7 +234,7 @@ class TechniquesView(discord.ui.View):
     @discord.ui.button(label="功法属性", style=discord.ButtonStyle.secondary, row=0)
     async def stats(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.response.send_message("尚未创建角色。", ephemeral=True)
         embed = _build_stats_embed(player)
@@ -246,23 +244,26 @@ class TechniquesView(discord.ui.View):
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         from utils.views.menu import MainMenuView, _build_menu_embed
         uid = str(interaction.user.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
 
         has_player = player is not None and not player.get("is_dead")
-        can_bt = has_player and self.cog._can_breakthrough(player) if has_player else False
+        from utils.player import can_breakthrough as _can_bt
+        can_bt = has_player and _can_bt(player) if has_player else False
 
         has_dual = False
         city_players = []
         if has_player:
             techniques = _parse_techniques(player["techniques"])
             has_dual = any(t.get("name") == "双修功法" for t in techniques)
-            with get_conn() as conn:
-                rows = conn.execute(
-                    "SELECT discord_id, name, realm, cultivation FROM players "
-                    "WHERE current_city = ? AND is_dead = 0 AND discord_id != ?",
-                    (player["current_city"], uid),
-                ).fetchall()
-            city_players = [dict(r) for r in rows]
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    text(
+                        "SELECT discord_id, name, realm, cultivation FROM players "
+                        "WHERE current_city = :city AND is_dead = 0 AND discord_id != :uid"
+                    ),
+                    {"city": player["current_city"], "uid": uid},
+                )
+                city_players = [dict(r._mapping) for r in result.fetchall()]
 
         view = MainMenuView(interaction.user, has_player, can_bt, self.cog, player, city_players)
         await interaction.response.send_message(embed=_build_menu_embed(has_dual), view=view)
@@ -284,7 +285,7 @@ class ToggleEquipView(discord.ui.View):
     async def select(self, interaction: discord.Interaction, select: discord.ui.Select):
         uid = str(interaction.user.id)
         name = select.values[0]
-        player = _get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.response.send_message("角色不存在。", ephemeral=True)
 
@@ -312,7 +313,7 @@ class ToggleEquipView(discord.ui.View):
                         ephemeral=True
                     )
             target["equipped"] = False
-            _save_techniques(uid, techniques)
+            await _save_techniques(uid, techniques)
             msg = f"已卸下功法「**{name}**」。"
         else:
             from utils.realms import get_technique_slot_limit
@@ -321,10 +322,10 @@ class ToggleEquipView(discord.ui.View):
             if equipped_count >= slot_limit:
                 return await interaction.response.send_message(f"当前境界（{player['realm']}）最多装备 {slot_limit} 本功法，请先卸下一本。", ephemeral=True)
             target["equipped"] = True
-            _save_techniques(uid, techniques)
+            await _save_techniques(uid, techniques)
             msg = f"已装备功法「**{name}**」。"
 
-        player = _get_player(uid)
+        player = await get_player(uid)
         embed = _build_techniques_embed(player)
         try:
             parent_msg = interaction.message.reference and await interaction.channel.fetch_message(interaction.message.reference.message_id)
@@ -350,7 +351,7 @@ class TrainSelectView(discord.ui.View):
     async def select(self, interaction: discord.Interaction, select: discord.ui.Select):
         uid = str(interaction.user.id)
         name = select.values[0]
-        player = _get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.response.send_message("角色不存在。", ephemeral=True)
         if player["is_dead"]:
@@ -423,7 +424,7 @@ class TrainConfirmView(discord.ui.View):
     @discord.ui.button(label="确认修炼", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.response.send_message("角色不存在。", ephemeral=True)
 
@@ -449,14 +450,23 @@ class TrainConfirmView(discord.ui.View):
         new_stones = player["spirit_stones"] - self.stones_cost
         new_lifespan = player["lifespan"] - self.years_cost
 
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE players SET techniques = ?, spirit_stones = ?, lifespan = ?, "
-                "cultivating_until = ?, cultivating_years = ?, last_active = ? WHERE discord_id = ?",
-                (json.dumps(techniques, ensure_ascii=False), new_stones, new_lifespan,
-                 cultivating_until, self.years_cost, now, uid),
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text(
+                    "UPDATE players SET techniques = :t, spirit_stones = :s, lifespan = :l, "
+                    "cultivating_until = :cu, cultivating_years = :cy, last_active = :la WHERE discord_id = :uid"
+                ),
+                {
+                    "t": json.dumps(techniques, ensure_ascii=False),
+                    "s": new_stones,
+                    "l": new_lifespan,
+                    "cu": cultivating_until,
+                    "cy": self.years_cost,
+                    "la": now,
+                    "uid": uid,
+                },
             )
-            conn.commit()
+            await session.commit()
 
         info = TECHNIQUES.get(self.tech_name, {})
         grade = info.get("grade", "?")
@@ -496,16 +506,17 @@ class LearnSelectView(discord.ui.View):
     async def select(self, interaction: discord.Interaction, select: discord.ui.Select):
         uid = str(interaction.user.id)
         name = select.values[0]
-        player = _get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.response.send_message("角色不存在。", ephemeral=True)
 
-        with get_conn() as conn:
-            row = conn.execute(
-                "SELECT quantity FROM inventory WHERE discord_id = ? AND item_id = ?",
-                (uid, name)
-            ).fetchone()
-        if not row or row["quantity"] < 1:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT quantity FROM inventory WHERE discord_id = :uid AND item_id = :name"),
+                {"uid": uid, "name": name},
+            )
+            row = result.fetchone()
+        if not row or row[0] < 1:
             return await interaction.response.send_message("背包中已没有这本功法书。", ephemeral=True)
 
         techniques = _parse_techniques(player["techniques"])
@@ -526,20 +537,20 @@ class LearnSelectView(discord.ui.View):
             "equipped": equipped_count < 5,
         })
 
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE players SET techniques = ? WHERE discord_id = ?",
-                (json.dumps(techniques, ensure_ascii=False), uid)
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET techniques = :t WHERE discord_id = :uid"),
+                {"t": json.dumps(techniques, ensure_ascii=False), "uid": uid},
             )
-            conn.execute(
-                "UPDATE inventory SET quantity = quantity - 1 WHERE discord_id = ? AND item_id = ?",
-                (uid, name)
+            await session.execute(
+                text("UPDATE inventory SET quantity = quantity - 1 WHERE discord_id = :uid AND item_id = :name"),
+                {"uid": uid, "name": name},
             )
-            conn.execute(
-                "DELETE FROM inventory WHERE discord_id = ? AND item_id = ? AND quantity <= 0",
-                (uid, name)
+            await session.execute(
+                text("DELETE FROM inventory WHERE discord_id = :uid AND item_id = :name AND quantity <= 0"),
+                {"uid": uid, "name": name},
             )
-            conn.commit()
+            await session.commit()
 
         grade = info.get("grade", "?")
         ttype = info.get("type", "?")

@@ -27,11 +27,13 @@ class TravelRegionButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         if self.region == "秘地":
-            from utils.db import get_conn
+            from sqlalchemy import text
+            from utils.db_async import AsyncSessionLocal
             uid = str(interaction.user.id)
-            with get_conn() as conn:
-                row = conn.execute("SELECT realm FROM players WHERE discord_id = ?", (uid,)).fetchone()
-            player_realm = row["realm"] if row else "炼气期1层"
+            async with AsyncSessionLocal() as session:
+                r = await session.execute(text("SELECT realm FROM players WHERE discord_id = :uid"), {"uid": uid})
+                row = r.fetchone()
+            player_realm = row._mapping["realm"] if row else "炼气期1层"
             player_idx = get_realm_index(player_realm)
 
             embed = discord.Embed(title="✦ 秘地 · 选择目的地 ✦", color=discord.Color.gold())

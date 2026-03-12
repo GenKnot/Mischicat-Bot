@@ -5,7 +5,10 @@ import discord
 from discord.ext import commands
 
 from utils.config import COMMAND_PREFIX
-from utils.db import get_conn
+from utils.db_async import AsyncSessionLocal
+from sqlalchemy import text
+from utils.player import get_player
+from utils.equipment_db import give_equipment
 from utils.events import get_event_pool
 from utils.character import seconds_to_years, get_explore_limit_bonus
 
@@ -13,26 +16,16 @@ EXPLORE_LIMIT = 8
 EXPLORE_RESET_YEARS = 5
 
 
-def _get_explore_limit(player) -> int:
-    bonus = get_explore_limit_bonus(
+async def _get_explore_limit(player) -> int:
+    bonus = await get_explore_limit_bonus(
         player["discord_id"], player["current_city"], player.get("cave")
     )
     return EXPLORE_LIMIT + bonus
 
 
-def _get_player(discord_id: str):
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM players WHERE discord_id = ?", (discord_id,)
-        ).fetchone()
-        return dict(row) if row else None
-
-
-def _apply_rewards(discord_id: str, rewards: dict):
+async def _apply_rewards(discord_id: str, rewards: dict):
     if not rewards:
         return
-    fields = []
-    values = []
     stat_map = {
         "spirit_stones": "spirit_stones",
         "lifespan": "lifespan",
@@ -47,28 +40,33 @@ def _apply_rewards(discord_id: str, rewards: dict):
     for key, val in rewards.items():
         if key == "discover_sect":
             import json
-            with get_conn() as conn:
-                row = conn.execute(
-                    "SELECT discovered_sects FROM players WHERE discord_id = ?", (discord_id,)
-                ).fetchone()
+            async with AsyncSessionLocal() as session:
+                row = await session.execute(
+                    text("SELECT discovered_sects FROM players WHERE discord_id = :uid"),
+                    {"uid": discord_id}
+                )
+                row = row.fetchone()
                 discovered = json.loads(row["discovered_sects"] or "[]") if row else []
                 if val not in discovered:
                     discovered.append(val)
-                    conn.execute(
-                        "UPDATE players SET discovered_sects = ? WHERE discord_id = ?",
-                        (json.dumps(discovered, ensure_ascii=False), discord_id)
+                    await session.execute(
+                        text("UPDATE players SET discovered_sects = :ds WHERE discord_id = :uid"),
+                        {"ds": json.dumps(discovered, ensure_ascii=False), "uid": discord_id}
                     )
-                    conn.commit()
+                    await session.commit()
             continue
         if key == "equipment":
             import random as _r
             from utils.equipment import generate_equipment, get_player_tier
-            from utils.db import give_equipment
             eq_spec = val
             chance = eq_spec.get("chance", 1.0)
             if _r.random() < chance:
-                with get_conn() as conn:
-                    p_row = conn.execute("SELECT realm FROM players WHERE discord_id = ?", (discord_id,)).fetchone()
+                async with AsyncSessionLocal() as session:
+                    p_row = await session.execute(
+                        text("SELECT realm FROM players WHERE discord_id = :uid"),
+                        {"uid": discord_id}
+                    )
+                    p_row = p_row.fetchone()
                 tier = get_player_tier(p_row["realm"]) if p_row else 0
                 quality_pool = eq_spec.get("quality_pool")
                 quality_weights = eq_spec.get("quality_weights")
@@ -77,27 +75,24 @@ def _apply_rewards(discord_id: str, rewards: dict):
                 else:
                     quality = eq_spec.get("quality")
                 eq = generate_equipment(tier=tier, quality=quality)
-                give_equipment(discord_id, eq)
+                await give_equipment(discord_id, eq)
                 rewards["_generated_equipment"] = eq
             continue
         col = stat_map.get(key)
         if col:
-            fields.append(f"{col} = MAX(0, {col} + ?)")
-            values.append(val)
-    if fields:
-        values.append(discord_id)
-        with get_conn() as conn:
-            conn.execute(
-                f"UPDATE players SET {', '.join(fields)} WHERE discord_id = ?", values
-            )
-            conn.commit()
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text(f"UPDATE players SET {col} = MAX(0, {col} + :val) WHERE discord_id = :uid"),
+                    {"val": val, "uid": discord_id}
+                )
+                await session.commit()
 
 
-def _check_explore_limit(player) -> tuple[bool, str]:
+async def _check_explore_limit(player) -> tuple[bool, str]:
     now_years = time.time() / (2 * 3600)
     reset_year = player["explore_reset_year"] or 0
     count = player["explore_count"] or 0
-    limit = _get_explore_limit(player)
+    limit = await _get_explore_limit(player)
 
     if now_years - reset_year >= EXPLORE_RESET_YEARS:
         return True, ""
@@ -109,7 +104,7 @@ def _check_explore_limit(player) -> tuple[bool, str]:
     return False, f"探险次数已用尽（{limit}/{limit}），约 **{years_left:.1f} 游戏年**后刷新。"
 
 
-def _increment_explore(discord_id: str, player):
+async def _increment_explore(discord_id: str, player):
     now_years = time.time() / (2 * 3600)
     reset_year = player["explore_reset_year"] or 0
     count = player["explore_count"] or 0
@@ -120,15 +115,15 @@ def _increment_explore(discord_id: str, player):
     else:
         count += 1
 
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE players SET explore_count = ?, explore_reset_year = ? WHERE discord_id = ?",
-            (count, reset_year, discord_id)
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            text("UPDATE players SET explore_count = :count, explore_reset_year = :reset_year WHERE discord_id = :uid"),
+            {"count": count, "reset_year": reset_year, "uid": discord_id}
         )
-        conn.commit()
+        await session.commit()
 
 
-def _consume_explore_buffs(discord_id: str, player: dict, rewards: dict):
+async def _consume_explore_buffs(discord_id: str, player: dict, rewards: dict):
     from utils.buffs import consume_once_buff, get_spirit_stones_bonus
     raw = player.get("active_buffs") or "{}"
     changed = False
@@ -143,22 +138,22 @@ def _consume_explore_buffs(discord_id: str, player: dict, rewards: dict):
     if stones_bonus > 0 and rewards.get("spirit_stones", 0) > 0:
         extra = int(rewards["spirit_stones"] * stones_bonus)
         if extra > 0:
-            with get_conn() as conn:
-                conn.execute(
-                    "UPDATE players SET spirit_stones = spirit_stones + ? WHERE discord_id = ?",
-                    (extra, discord_id)
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("UPDATE players SET spirit_stones = spirit_stones + :extra WHERE discord_id = :uid"),
+                    {"extra": extra, "uid": discord_id}
                 )
-                conn.commit()
+                await session.commit()
         _, raw = consume_once_buff(raw, "spirit_stones_bonus_once")
         changed = True
 
     if changed:
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE players SET active_buffs = ? WHERE discord_id = ?",
-                (raw, discord_id)
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET active_buffs = :buffs WHERE discord_id = :uid"),
+                {"buffs": raw, "uid": discord_id}
             )
-            conn.commit()
+            await session.commit()
 
 
 def _check_condition(player, condition) -> bool:
@@ -198,10 +193,10 @@ class ExploreResultView(discord.ui.View):
     async def continue_explore(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         uid = str(interaction.user.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
         if not player or player["is_dead"]:
             return await interaction.followup.send("无法继续探险。", ephemeral=True)
-        ok, msg = _check_explore_limit(player)
+        ok, msg = await _check_explore_limit(player)
         if not ok:
             return await interaction.followup.send(f"{msg}", ephemeral=True)
         now = time.time()
@@ -214,10 +209,10 @@ class ExploreResultView(discord.ui.View):
         if player.get("gathering_until") and now < player["gathering_until"]:
             return await interaction.followup.send("道友正在采集中，无法探险。", ephemeral=True)
         from utils.events.public.wanbao import is_auction_locked
-        if is_auction_locked(uid):
+        if await is_auction_locked(uid):
             return await interaction.followup.send("拍卖会进行中，在万宝楼内无法探险。", ephemeral=True)
-        _increment_explore(uid, player)
-        player = _get_player(uid)
+        await _increment_explore(uid, player)
+        player = await get_player(uid)
         event = get_event_pool(dict(player))
         embed = discord.Embed(
             title=f"✦ {event['title']} ✦",
@@ -225,7 +220,7 @@ class ExploreResultView(discord.ui.View):
             color=discord.Color.gold(),
         )
         count = player["explore_count"]
-        limit = _get_explore_limit(player)
+        limit = await _get_explore_limit(player)
         embed.set_footer(text=f"本轮探险次数：{count}/{limit}")
         await interaction.followup.send(
             interaction.user.mention,
@@ -238,20 +233,22 @@ class ExploreResultView(discord.ui.View):
         await interaction.response.defer()
         cog = self.cog
         uid = str(interaction.user.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
         has_player = player is not None and not player["is_dead"]
         from utils.realms import cultivation_needed
         can_bt = has_player and player["cultivation"] >= cultivation_needed(player["realm"])
         import json
         city_players = []
         if has_player:
-            with get_conn() as conn:
-                rows = conn.execute(
-                    "SELECT discord_id, name, realm, cultivation FROM players "
-                    "WHERE current_city = ? AND is_dead = 0 AND discord_id != ?",
-                    (player["current_city"], uid)
-                ).fetchall()
-            city_players = [dict(r) for r in rows]
+            async with AsyncSessionLocal() as session:
+                rows = await session.execute(
+                    text(
+                        "SELECT discord_id, name, realm, cultivation FROM players "
+                        "WHERE current_city = :city AND is_dead = 0 AND discord_id != :uid"
+                    ),
+                    {"city": player["current_city"], "uid": uid}
+                )
+                city_players = [dict(r._mapping) for r in rows.fetchall()]
         from utils.views import MainMenuView, _build_menu_embed
         cult_cog = cog.bot.cogs.get("Cultivation")
         import json
@@ -330,8 +327,8 @@ class ExploreChoiceButton(discord.ui.Button):
                 [c for c in self.view.event["choices"] if c["label"] == choice["label"]],
                 dict(player)
             )
-            _apply_rewards(uid, result["rewards"])
-            _consume_explore_buffs(uid, dict(player), result["rewards"])
+            await _apply_rewards(uid, result["rewards"])
+            await _consume_explore_buffs(uid, dict(player), result["rewards"])
             desc = result["flavor"] or "平安无事。"
             eq = result["rewards"].get("_generated_equipment")
             if eq:
@@ -384,8 +381,8 @@ class ExploreNextButton(discord.ui.Button):
         same_label = [c for c in choices if c["label"] == choices[self.index]["label"]]
         result = _pick_choice_result(same_label, player)
 
-        _apply_rewards(uid, result["rewards"])
-        _consume_explore_buffs(uid, player, result["rewards"])
+        await _apply_rewards(uid, result["rewards"])
+        await _consume_explore_buffs(uid, player, result["rewards"])
         desc = result["flavor"] or "平安无事。"
         eq = result["rewards"].get("_generated_equipment")
         if eq:
@@ -405,7 +402,7 @@ class ExploreCog(commands.Cog, name="Explore"):
     @commands.hybrid_command(name="探险", aliases=["tx"], description="在当前城市附近探险，触发机缘或风险事件")
     async def explore(self, ctx):
         uid = str(ctx.author.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
 
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `{COMMAND_PREFIX}创建角色`。")
@@ -427,15 +424,15 @@ class ExploreCog(commands.Cog, name="Explore"):
             return await ctx.send(f"{ctx.author.mention} 道友正在执行任务「**{q_data['title']}**」，无法探险。")
 
         from utils.events.public.wanbao import is_auction_locked
-        if is_auction_locked(uid):
+        if await is_auction_locked(uid):
             return await ctx.send(f"{ctx.author.mention} 拍卖会进行中，在万宝楼内无法探险。")
 
-        ok, msg = _check_explore_limit(player)
+        ok, msg = await _check_explore_limit(player)
         if not ok:
             return await ctx.send(f"{ctx.author.mention} {msg}")
 
-        _increment_explore(uid, player)
-        player = _get_player(uid)
+        await _increment_explore(uid, player)
+        player = await get_player(uid)
 
         event = get_event_pool(dict(player))
         embed = discord.Embed(
@@ -444,7 +441,7 @@ class ExploreCog(commands.Cog, name="Explore"):
             color=discord.Color.gold(),
         )
         count = player["explore_count"]
-        limit = _get_explore_limit(player)
+        limit = await _get_explore_limit(player)
         embed.set_footer(text=f"本轮探险次数：{count}/{limit}")
         await ctx.send(
             ctx.author.mention,
@@ -459,15 +456,15 @@ class ExploreCog(commands.Cog, name="Explore"):
             return
         
         uid = target_id or str(ctx.author.id)
-        
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE players SET explore_count = 0, explore_reset_year = 0 WHERE discord_id = ?",
-                (uid,)
+
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET explore_count = 0, explore_reset_year = 0 WHERE discord_id = :uid"),
+                {"uid": uid}
             )
-            conn.commit()
-        
-        player = _get_player(uid)
+            await session.commit()
+
+        player = await get_player(uid)
         if player:
             await ctx.send(f"已重置 **{player['name']}** 的探险次数。")
         else:

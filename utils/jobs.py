@@ -291,23 +291,30 @@ def _req_desc(req: dict) -> str:
     return "、".join(parts) if parts else "无"
 
 
-def do_job(player: dict, job: dict) -> dict:
-    from utils.db import get_conn, add_item
+def get_job_list() -> list[dict]:
+    return JOBS
+
+
+async def do_job(player: dict, job: dict) -> dict:
+    from utils.inventory import add_item
+    from sqlalchemy import text
+    from utils.db_async import AsyncSessionLocal
     import time
 
     uid = player["discord_id"]
     now = time.time()
 
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT job_cooldown_until, job_daily_count, job_daily_reset FROM players WHERE discord_id = ?",
-            (uid,)
-        ).fetchone()
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("SELECT job_cooldown_until, job_daily_count, job_daily_reset FROM players WHERE discord_id = :uid"),
+            {"uid": uid}
+        )
+        row = result.fetchone()
 
     if row:
-        cooldown_until = row["job_cooldown_until"] or 0
-        daily_count = row["job_daily_count"] or 0
-        daily_reset = row["job_daily_reset"] or 0
+        cooldown_until = row[0] or 0
+        daily_count = row[1] or 0
+        daily_reset = row[2] or 0
 
         if now < cooldown_until:
             remaining = int(cooldown_until - now)
@@ -338,7 +345,7 @@ def do_job(player: dict, job: dict) -> dict:
     if "items" in job["reward"]:
         for item_name, chance in job["reward"]["items"]:
             if random.random() < chance:
-                add_item(uid, item_name, 1)
+                await add_item(uid, item_name, 1)
                 items_gained.append(item_name)
 
     risk_triggered = False
@@ -349,26 +356,29 @@ def do_job(player: dict, job: dict) -> dict:
             loss_min, loss_max = job["risk"]["lifespan_loss"]
             lifespan_loss = random.randint(loss_min, loss_max)
 
-    with get_conn() as conn:
-        updates = [
-            "spirit_stones = spirit_stones + ?",
-            "job_cooldown_until = ?",
-            "job_daily_count = COALESCE(job_daily_count, 0) + 1",
-            "job_daily_reset = ?",
-        ]
-        vals = [stones, now + COOLDOWN_SECONDS, now]
-        if rep_gain:
-            updates.append("reputation = reputation + ?")
-            vals.append(rep_gain)
-        if alchemy_exp_gain:
-            updates.append("alchemy_exp = alchemy_exp + ?")
-            vals.append(alchemy_exp_gain)
-        if risk_triggered and lifespan_loss:
-            updates.append("lifespan = MAX(1, lifespan - ?)")
-            vals.append(lifespan_loss)
-        vals.append(uid)
-        conn.execute(f"UPDATE players SET {', '.join(updates)} WHERE discord_id = ?", vals)
-        conn.commit()
+    updates = [
+        "spirit_stones = spirit_stones + :stones",
+        "job_cooldown_until = :cooldown",
+        "job_daily_count = COALESCE(job_daily_count, 0) + 1",
+        "job_daily_reset = :reset",
+    ]
+    params: dict = {"stones": stones, "cooldown": now + COOLDOWN_SECONDS, "reset": now, "uid": uid}
+    if rep_gain:
+        updates.append("reputation = reputation + :rep")
+        params["rep"] = rep_gain
+    if alchemy_exp_gain:
+        updates.append("alchemy_exp = alchemy_exp + :aexp")
+        params["aexp"] = alchemy_exp_gain
+    if risk_triggered and lifespan_loss:
+        updates.append("lifespan = MAX(1, lifespan - :lloss)")
+        params["lloss"] = lifespan_loss
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            text(f"UPDATE players SET {', '.join(updates)} WHERE discord_id = :uid"),
+            params
+        )
+        await session.commit()
 
     dialogue = random.choice(job["dialogues"])
 

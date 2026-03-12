@@ -82,19 +82,22 @@ class _ZhujiButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         import time
         import random
+        from sqlalchemy import text
+        from utils.db_async import AsyncSessionLocal
         from utils.items import calc_zhuji_breakthrough_rate
-        from utils.db import remove_item
+        from utils.inventory import remove_item
         from utils.realms import lifespan_max_for_realm, apply_failure, next_realm
+        from utils.player import get_player
 
         await interaction.response.defer()
         view: ZhujiBreakthroughView = self.view
         cog = view.cog
         uid = view.uid
-        player = cog._get_player(uid)
+        player = await get_player(uid)
         now = time.time()
 
         if self.use_pill:
-            if not remove_item(uid, "筑基丹"):
+            if not await remove_item(uid, "筑基丹"):
                 await interaction.followup.send("筑基丹已不在背包中。")
                 view.stop()
                 return
@@ -107,13 +110,12 @@ class _ZhujiButton(discord.ui.Button):
             new_lifespan_max = lifespan_max_for_realm(nxt)
             lifespan_gain = max(0, new_lifespan_max - player["lifespan_max"])
             new_lifespan = player["lifespan"] + lifespan_gain
-            from utils.db import get_conn
-            with get_conn() as conn:
-                conn.execute(
-                    "UPDATE players SET realm = ?, lifespan = ?, lifespan_max = ?, cultivation = 0, last_active = ? WHERE discord_id = ?",
-                    (nxt, new_lifespan, new_lifespan_max, now, uid)
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("UPDATE players SET realm = :realm, lifespan = :ls, lifespan_max = :lsm, cultivation = 0, last_active = :la WHERE discord_id = :uid"),
+                    {"realm": nxt, "ls": new_lifespan, "lsm": new_lifespan_max, "la": now, "uid": uid}
                 )
-                conn.commit()
+                await session.commit()
             pill_note = "（服用筑基丹）" if self.use_pill else ""
             await interaction.followup.send(
                 f"🎉 **{player['name']}** 炼气化液，成功筑基{pill_note}！\n"
@@ -124,13 +126,12 @@ class _ZhujiButton(discord.ui.Button):
             from utils.realms import roll_breakthrough, apply_failure
             _, outcome = roll_breakthrough(player["realm"], player["physique"], player["bone"], player["cultivation"])
             new_cultivation, new_lifespan, fail_msg = apply_failure(player["cultivation"], player["lifespan"], outcome)
-            from utils.db import get_conn
-            with get_conn() as conn:
-                conn.execute(
-                    "UPDATE players SET cultivation = ?, lifespan = ?, last_active = ? WHERE discord_id = ?",
-                    (new_cultivation, new_lifespan, now, uid)
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("UPDATE players SET cultivation = :cult, lifespan = :ls, last_active = :la WHERE discord_id = :uid"),
+                    {"cult": new_cultivation, "ls": new_lifespan, "la": now, "uid": uid}
                 )
-                conn.commit()
+                await session.commit()
             pill_note = "（筑基丹已消耗）" if self.use_pill else ""
             await interaction.followup.send(
                 f"💔 **{player['name']}** 筑基失败{pill_note}！{fail_msg}\n"
@@ -145,31 +146,35 @@ class _BackToMenuButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         import json
+        from sqlalchemy import text
+        from utils.db_async import AsyncSessionLocal
         from utils.views.menu import MainMenuView, _build_menu_embed
+        from utils.player import get_player, settle_time, apply_updates, can_breakthrough
         await interaction.response.defer()
         cog = self.view.cog
         uid = str(interaction.user.id)
-        player = cog._get_player(uid)
+        player = await get_player(uid)
         if player and not player["is_dead"]:
-            updates, _ = cog._settle_time(player)
-            cog._apply_updates(uid, updates)
-            player = cog._get_player(uid)
+            updates, _ = await settle_time(player)
+            await apply_updates(uid, updates)
+            player = await get_player(uid)
         has_player = player is not None and not player["is_dead"]
-        can_bt = has_player and cog._can_breakthrough(player)
+        can_bt = has_player and can_breakthrough(player)
         has_dual = has_player and any(
             (t if isinstance(t, str) else t.get("name", "")) == "双修功法"
             for t in json.loads(player["techniques"] or "[]")
         )
         city_players = []
         if has_player:
-            from utils.db import get_conn
-            with get_conn() as conn:
-                rows = conn.execute(
-                    "SELECT discord_id, name, realm, cultivation FROM players "
-                    "WHERE current_city = ? AND is_dead = 0 AND discord_id != ?",
-                    (player["current_city"], uid)
-                ).fetchall()
-            city_players = [dict(r) for r in rows]
+            async with AsyncSessionLocal() as session:
+                r = await session.execute(
+                    text(
+                        "SELECT discord_id, name, realm, cultivation FROM players "
+                        "WHERE current_city = :city AND is_dead = 0 AND discord_id != :uid"
+                    ),
+                    {"city": player["current_city"], "uid": uid}
+                )
+                city_players = [dict(row._mapping) for row in r.fetchall()]
         self.view.stop()
         await interaction.followup.send(
             embed=_build_menu_embed(has_dual),
@@ -223,19 +228,22 @@ class _MajorBreakthroughButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         import time
         import random
+        from sqlalchemy import text
+        from utils.db_async import AsyncSessionLocal
         from utils.items.breakthrough import calc_ningdan_breakthrough_rate, calc_huaying_breakthrough_rate
-        from utils.db import remove_item
+        from utils.inventory import remove_item
         from utils.realms import lifespan_max_for_realm, apply_failure, next_realm
+        from utils.player import get_player
 
         await interaction.response.defer()
         view = self.view
         cog = view.cog
         uid = view.uid
-        player = cog._get_player(uid)
+        player = await get_player(uid)
         now = time.time()
 
         if self.use_pill:
-            if not remove_item(uid, self.pill_name):
+            if not await remove_item(uid, self.pill_name):
                 await interaction.followup.send(f"「{self.pill_name}」已不在背包中。")
                 view.stop()
                 return
@@ -258,13 +266,12 @@ class _MajorBreakthroughButton(discord.ui.Button):
             new_lifespan_max = lifespan_max_for_realm(nxt)
             lifespan_gain = max(0, new_lifespan_max - player["lifespan_max"])
             new_lifespan = player["lifespan"] + lifespan_gain
-            from utils.db import get_conn
-            with get_conn() as conn:
-                conn.execute(
-                    "UPDATE players SET realm = ?, lifespan = ?, lifespan_max = ?, cultivation = 0, last_active = ? WHERE discord_id = ?",
-                    (nxt, new_lifespan, new_lifespan_max, now, uid)
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("UPDATE players SET realm = :realm, lifespan = :ls, lifespan_max = :lsm, cultivation = 0, last_active = :la WHERE discord_id = :uid"),
+                    {"realm": nxt, "ls": new_lifespan, "lsm": new_lifespan_max, "la": now, "uid": uid}
                 )
-                conn.commit()
+                await session.commit()
             await interaction.followup.send(
                 f"🎉 **{player['name']}** {from_realm_label}{pill_note_win}！\n"
                 f"**{player['realm']}** ➜ **{nxt}**\n"
@@ -274,13 +281,12 @@ class _MajorBreakthroughButton(discord.ui.Button):
             from utils.realms import roll_breakthrough
             _, outcome = roll_breakthrough(player["realm"], player["physique"], player["bone"], player["cultivation"])
             new_cultivation, new_lifespan, fail_msg = apply_failure(player["cultivation"], player["lifespan"], outcome)
-            from utils.db import get_conn
-            with get_conn() as conn:
-                conn.execute(
-                    "UPDATE players SET cultivation = ?, lifespan = ?, last_active = ? WHERE discord_id = ?",
-                    (new_cultivation, new_lifespan, now, uid)
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("UPDATE players SET cultivation = :cult, lifespan = :ls, last_active = :la WHERE discord_id = :uid"),
+                    {"cult": new_cultivation, "ls": new_lifespan, "la": now, "uid": uid}
                 )
-                conn.commit()
+                await session.commit()
             await interaction.followup.send(
                 f"💔 **{player['name']}** 突破失败{pill_note_fail}！{fail_msg}\n"
                 f"修为：{new_cultivation}　寿元：{new_lifespan}年"

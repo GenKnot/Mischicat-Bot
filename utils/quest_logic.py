@@ -3,7 +3,6 @@ import random
 import json
 from sqlalchemy import select
 from utils.db_async import AsyncSessionLocal, Player, Inventory, Equipment
-from utils.db import get_conn, add_item, remove_item
 from utils.combat import calc_power
 from utils.equipment import generate_equipment
 from utils.character import years_to_seconds, seconds_to_years
@@ -44,13 +43,15 @@ async def start_quest(discord_id: str, quest: dict, tier: str) -> dict:
         if player.gathering_until and now < player.gathering_until:
             return {"success": False, "message": "采集中无法接取任务"}
         
-        with get_conn() as conn:
-            defense_row = conn.execute(
+        from sqlalchemy import text as _text
+        defense_row = (await session.execute(
+            _text(
                 "SELECT 1 FROM public_event_participants ep "
                 "JOIN public_events e ON ep.event_id = e.event_id "
-                "WHERE ep.discord_id = ? AND ep.activity = 'defense' AND e.status = 'active'",
-                (discord_id,)
-            ).fetchone()
+                "WHERE ep.discord_id = :uid AND ep.activity = 'defense' AND e.status = 'active'"
+            ),
+            {"uid": discord_id}
+        )).fetchone()
         if defense_row:
             return {"success": False, "message": "守城期间无法接取任务"}
         
@@ -150,11 +151,10 @@ async def _resolve_combat_quest(discord_id: str, player: Player, quest_data: dic
                 select(Player).where(Player.party_id == party_id, Player.is_dead == 0)
             )
             party_members = list(party_rows.scalars())
-            total_power = sum(calc_power(
-                {c.key: getattr(m, c.key) for c in m.__table__.columns}
-            ) for m in party_members) * random.uniform(0.85, 1.15)
+            powers = [await calc_power({c.key: getattr(m, c.key) for c in m.__table__.columns}) for m in party_members]
+            total_power = sum(powers) * random.uniform(0.85, 1.15)
     else:
-        total_power = calc_power(player_dict) * random.uniform(0.85, 1.15)
+        total_power = (await calc_power(player_dict)) * random.uniform(0.85, 1.15)
     
     enemy = quest_data.get("enemy", {})
     enemy_power = enemy.get("power", 100) * random.uniform(0.85, 1.15)
@@ -202,7 +202,7 @@ async def _resolve_combat_quest(discord_id: str, player: Player, quest_data: dic
         }
     else:
         from utils.combat import roll_escape
-        escaped, escape_pct = roll_escape(player_dict)
+        escaped, escape_pct = await roll_escape(player_dict)
         
         if escaped:
             tier = quest_data.get("tier", "普通")
@@ -313,8 +313,8 @@ async def _apply_quest_rewards(discord_id: str, rewards: dict, player_dict: dict
                     roll_results.append((member, roll))
                 roll_results.sort(key=lambda x: x[1], reverse=True)
                 winner = roll_results[0][0]
-                from utils.db import give_equipment
-                give_equipment(winner.discord_id, equipment_drop)
+                from utils.equipment_db import give_equipment
+                await give_equipment(winner.discord_id, equipment_drop)
 
             for member in party_members:
                 member_id = member.discord_id
@@ -327,8 +327,9 @@ async def _apply_quest_rewards(discord_id: str, rewards: dict, player_dict: dict
                     member.reputation += rewards["reputation"]
                 
                 if rewards.get("items"):
+                    from utils.inventory import add_item as _add_item
                     for item_name in rewards["items"]:
-                        add_item(member_id, item_name, 1)
+                        await _add_item(member_id, item_name, 1)
                 
                 member.active_quest = None
                 member.quest_due = None
@@ -356,12 +357,13 @@ async def _apply_quest_rewards(discord_id: str, rewards: dict, player_dict: dict
                 player.reputation += rewards["reputation"]
             
             if rewards.get("items"):
+                from utils.inventory import add_item as _add_item
                 for item_name in rewards["items"]:
-                    add_item(discord_id, item_name, 1)
+                    await _add_item(discord_id, item_name, 1)
             
             if equipment_drop:
-                from utils.db import give_equipment
-                give_equipment(discord_id, equipment_drop)
+                from utils.equipment_db import give_equipment
+                await give_equipment(discord_id, equipment_drop)
             
             player.active_quest = None
             player.quest_due = None

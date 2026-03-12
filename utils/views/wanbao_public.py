@@ -2,7 +2,8 @@ import time
 
 import discord
 
-from utils.db import get_conn
+from sqlalchemy import text
+from utils.db_async import AsyncSessionLocal
 
 WANBAO_DESC = (
     "每日北美东部时间 **20:00**，万宝楼将举办大型拍卖会。\n\n"
@@ -31,6 +32,13 @@ WANBAO_DESC = (
 WANBAO_TRIGGER_HOUR = 20
 
 
+class WanbaoPublicView(discord.ui.View):
+    def __init__(self, author, pe_cog=None):
+        super().__init__(timeout=120)
+        self.author = author
+        self.pe_cog = pe_cog
+
+
 class _WanbaoEventButton(discord.ui.Button):
     def __init__(self, pe_cog=None):
         super().__init__(label="万宝楼拍卖会", style=discord.ButtonStyle.primary)
@@ -38,12 +46,12 @@ class _WanbaoEventButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         from utils.events.public.wanbao import get_active_auction, get_lots
-        auction = get_active_auction()
+        auction = await get_active_auction()
 
         embed = discord.Embed(title="✦ 万宝楼大型拍卖会 ✦", description=WANBAO_DESC, color=discord.Color.gold())
 
         if auction:
-            lots = get_lots(auction["auction_id"])
+            lots = await get_lots(auction["auction_id"])
             status_map = {"pending": "🟡 等待开始", "active": "🔴 进行中", "ended": "⚫ 已结束"}
             status_text = status_map.get(auction["status"], auction["status"])
             if auction["status"] == "active":
@@ -78,11 +86,15 @@ class _WanbaoDetailView(discord.ui.View):
     @discord.ui.button(label="前往万宝楼", style=discord.ButtonStyle.success)
     async def travel(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        with get_conn() as conn:
-            row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT * FROM players WHERE discord_id = :uid"),
+                {"uid": uid},
+            )
+            row = result.fetchone()
         if not row:
             return await interaction.response.send_message("尚未创建角色。", ephemeral=True)
-        player = dict(row)
+        player = dict(row._mapping)
         if player["current_city"] == "万宝楼":
             return await interaction.response.send_message("你已在万宝楼。", ephemeral=True)
         now = time.time()
@@ -92,19 +104,26 @@ class _WanbaoDetailView(discord.ui.View):
             return await interaction.response.send_message("正在采集中，无法移动。", ephemeral=True)
         if player.get("active_quest"):
             return await interaction.response.send_message("正在执行任务，无法移动。", ephemeral=True)
-        with get_conn() as conn:
-            conn.execute("UPDATE players SET current_city = ?, last_active = ? WHERE discord_id = ?", ("万宝楼", now, uid))
-            conn.commit()
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET current_city = :city, last_active = :now WHERE discord_id = :uid"),
+                {"city": "万宝楼", "now": now, "uid": uid},
+            )
+            await session.commit()
         await interaction.response.send_message("已传送至 **万宝楼**，拍卖会即将开始！", ephemeral=True)
 
     @discord.ui.button(label="进入拍卖", style=discord.ButtonStyle.primary)
     async def enter_auction(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        with get_conn() as conn:
-            row = conn.execute("SELECT current_city FROM players WHERE discord_id = ?", (uid,)).fetchone()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT current_city FROM players WHERE discord_id = :uid"),
+                {"uid": uid},
+            )
+            row = result.fetchone()
         if not row:
             return await interaction.response.send_message("尚未创建角色。", ephemeral=True)
-        if row["current_city"] != "万宝楼":
+        if row[0] != "万宝楼":
             return await interaction.response.send_message("需先前往 **万宝楼** 方可进入拍卖。", ephemeral=True)
         if not self.pe_cog:
             return await interaction.response.send_message("系统暂时不可用。", ephemeral=True)
@@ -112,32 +131,36 @@ class _WanbaoDetailView(discord.ui.View):
         from utils.events.public.wanbao import get_active_auction, get_lots, get_last_ended_auction, get_or_create_auction
         from utils.views.wanbao import WanbaoMainView, build_lots_list_embed, _item_display
         from utils.views.wanbao_public import WANBAO_DESC, WANBAO_TRIGGER_HOUR
-        auction = get_active_auction()
+        auction = await get_active_auction()
         if not auction:
             from datetime import datetime
             from zoneinfo import ZoneInfo
             today_str = datetime.now(ZoneInfo("America/Montreal")).strftime("%Y-%m-%d")
-            auction = get_or_create_auction(today_str)
+            auction = await get_or_create_auction(today_str)
         if not auction or auction["status"] == "ended":
             embed = discord.Embed(title="✦ 万宝楼大型拍卖会 ✦", description=WANBAO_DESC, color=discord.Color.gold())
             embed.add_field(name="今日状态", value=f"🟡 等待开始　北美东部时间 **{WANBAO_TRIGGER_HOUR}:00** 开始", inline=False)
-            last = get_last_ended_auction()
+            last = await get_last_ended_auction()
             if last:
-                last_lots = get_lots(last["auction_id"])
+                last_lots = await get_lots(last["auction_id"])
                 lines = []
                 for lot in last_lots:
                     item_str = _item_display(lot)
                     if lot["status"] == "sold":
-                        with get_conn() as conn:
-                            p = conn.execute("SELECT name FROM players WHERE discord_id = ?", (lot["bidder_id"],)).fetchone()
-                        buyer = p["name"] if p else f"<@{lot['bidder_id']}>"
+                        async with AsyncSessionLocal() as session:
+                            result = await session.execute(
+                                text("SELECT name FROM players WHERE discord_id = :uid"),
+                                {"uid": lot["bidder_id"]},
+                            )
+                            p = result.fetchone()
+                        buyer = p[0] if p else f"<@{lot['bidder_id']}>"
                         lines.append(f"✅ {item_str}　{buyer} · {lot['current_bid']} 灵石")
                     else:
                         lines.append(f"❌ {item_str}　流拍")
                 embed.add_field(name="上次拍卖记录", value="\n".join(lines) if lines else "暂无记录", inline=False)
             view = WanbaoMainView(interaction.user, self.pe_cog)
             return await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-        lots = get_lots(auction["auction_id"])
+        lots = await get_lots(auction["auction_id"])
         status_text = {"pending": "等待开始", "active": "进行中", "ended": "已结束"}.get(auction["status"], "未知")
         embed = discord.Embed(title="✦ 万宝楼拍卖会 ✦", description=f"状态：**{status_text}**　拍品：**{len(lots)}** 件", color=discord.Color.gold())
         if auction["status"] == "pending":
@@ -151,9 +174,9 @@ class _WanbaoDetailView(discord.ui.View):
         from utils.events.public.wanbao import get_active_auction
         from utils.views.public_event_overview import PublicEventOverviewView
         from utils.views.spirit_rain import _get_active_event, _get_pending_event
-        auction = get_active_auction()
-        active = _get_active_event()
-        pending = _get_pending_event() if not active else None
+        auction = await get_active_auction()
+        active = await _get_active_event()
+        pending = await _get_pending_event() if not active else None
         view = PublicEventOverviewView(active, pending, auction, self.pe_cog)
         await interaction.response.edit_message(content=None, view=view)
 
@@ -164,11 +187,15 @@ class _WanbaoTravelButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
-        with get_conn() as conn:
-            row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT * FROM players WHERE discord_id = :uid"),
+                {"uid": uid},
+            )
+            row = result.fetchone()
         if not row:
             return await interaction.response.send_message("尚未创建角色。", ephemeral=True)
-        player = dict(row)
+        player = dict(row._mapping)
         if player["current_city"] == "万宝楼":
             return await interaction.response.send_message("你已在万宝楼。", ephemeral=True)
         now = time.time()
@@ -178,7 +205,10 @@ class _WanbaoTravelButton(discord.ui.Button):
             return await interaction.response.send_message("正在采集中，无法移动。", ephemeral=True)
         if player.get("active_quest"):
             return await interaction.response.send_message("正在执行任务，无法移动。", ephemeral=True)
-        with get_conn() as conn:
-            conn.execute("UPDATE players SET current_city = ?, last_active = ? WHERE discord_id = ?", ("万宝楼", now, uid))
-            conn.commit()
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET current_city = :city, last_active = :now WHERE discord_id = :uid"),
+                {"city": "万宝楼", "now": now, "uid": uid},
+            )
+            await session.commit()
         await interaction.response.send_message("已传送至 **万宝楼**，拍卖会即将开始！", ephemeral=True)

@@ -123,11 +123,13 @@ def _back_only_view(author, player, cog):
 
 async def _go_back(interaction: discord.Interaction, author, player, cog):
     from utils.views.city import CityMenuView, _city_menu_embed
-    from utils.db import get_conn
+    from sqlalchemy import text
+    from utils.db_async import AsyncSessionLocal
     uid = str(interaction.user.id)
-    with get_conn() as conn:
-        p = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid})
+        p = dict(result.fetchone()._mapping)
     await interaction.response.edit_message(
-        embed=_city_menu_embed(p),
+        embed=await _city_menu_embed(p),
         view=CityMenuView(interaction.user, p, cog),
     )

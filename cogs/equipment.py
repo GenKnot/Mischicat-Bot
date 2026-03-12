@@ -2,29 +2,27 @@ import discord
 from discord.ext import commands
 
 from utils.config import COMMAND_PREFIX
-from utils.db import get_conn, get_equipment_list, get_equipped, equip_item, unequip_item, discard_equipment
+from utils.equipment_db import get_equipment_list, get_equipped, equip_item, unequip_item, discard_equipment
 from utils.equipment import format_equipment, equip_stat_bonus, get_player_tier, QUALITY_COLOR, STAT_NAMES, SLOTS
+from utils.inventory import get_inventory, remove_item
+from utils.player import get_player
+from utils.db_async import AsyncSessionLocal
+from sqlalchemy import text
 
 
 class EquipmentCog(commands.Cog, name="Equipment"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    def _get_player(self, discord_id: str):
-        with get_conn() as conn:
-            row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (discord_id,)).fetchone()
-            return dict(row) if row else None
-
     @commands.hybrid_command(name="背包", aliases=["bb"], description="查看当前角色的背包与装备")
     async def backpack(self, ctx):
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
         if not player or player["is_dead"]:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
 
-        from utils.db import get_inventory
-        items = get_inventory(uid)
-        equips = get_equipment_list(uid)
+        items = await get_inventory(uid)
+        equips = await get_equipment_list(uid)
 
         pages = _build_backpack_pages(player, items, equips)
         cog = self.bot.cogs.get("Cultivation")
@@ -34,11 +32,11 @@ class EquipmentCog(commands.Cog, name="Equipment"):
     @commands.hybrid_command(name="装备详情", aliases=["zbxq"], description="查看已装备装备的详细属性与总加成")
     async def equip_details(self, ctx):
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
         if not player or player["is_dead"]:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
 
-        equipped = get_equipped(uid)
+        equipped = await get_equipped(uid)
         if not equipped:
             return await ctx.send(f"{ctx.author.mention} 当前未装备任何装备。")
 
@@ -58,12 +56,12 @@ class EquipmentCog(commands.Cog, name="Equipment"):
         uid = str(ctx.author.id)
         if not equip_id:
             return await ctx.send(f"{ctx.author.mention} 用法：`{COMMAND_PREFIX}装备 [装备ID]`，可在 `{COMMAND_PREFIX}背包` 中查看ID。")
-        player = self._get_player(uid)
+        player = await get_player(uid)
         if not player or player["is_dead"]:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
 
         tier = get_player_tier(player["realm"])
-        ok, msg = equip_item(uid, equip_id, tier)
+        ok, msg = await equip_item(uid, equip_id, tier)
         await ctx.send(f"{ctx.author.mention} {msg}")
 
     @commands.hybrid_command(name="卸下", aliases=["xx"], description="根据装备ID卸下指定装备")
@@ -71,7 +69,7 @@ class EquipmentCog(commands.Cog, name="Equipment"):
         uid = str(ctx.author.id)
         if not equip_id:
             return await ctx.send(f"{ctx.author.mention} 用法：`{COMMAND_PREFIX}卸下 [装备ID]`")
-        ok, msg = unequip_item(uid, equip_id)
+        ok, msg = await unequip_item(uid, equip_id)
         await ctx.send(f"{ctx.author.mention} {msg}")
 
     @commands.hybrid_command(name="丢弃装备", aliases=["dqzb"], description="根据装备ID永久丢弃一件装备")
@@ -79,7 +77,7 @@ class EquipmentCog(commands.Cog, name="Equipment"):
         uid = str(ctx.author.id)
         if not equip_id:
             return await ctx.send(f"{ctx.author.mention} 用法：`{COMMAND_PREFIX}丢弃装备 [装备ID]`")
-        ok, msg = discard_equipment(uid, equip_id)
+        ok, msg = await discard_equipment(uid, equip_id)
         await ctx.send(f"{ctx.author.mention} {msg}")
 
     @commands.hybrid_command(name="使用", aliases=["sy"], description="使用背包中的丹药或道具")
@@ -89,8 +87,7 @@ class EquipmentCog(commands.Cog, name="Equipment"):
             return await ctx.send(f"{ctx.author.mention} 用法：`{COMMAND_PREFIX}使用 [道具名]`")
 
         from utils.items import ITEMS
-        from utils.db_async import AsyncSessionLocal, Player, Inventory
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        from utils.db_async import Player, Inventory
         import time
 
         item_name_clean = item_name.strip()
@@ -327,7 +324,7 @@ class EquipmentCog(commands.Cog, name="Equipment"):
         uid = str(ctx.author.id)
         if not args:
             return await ctx.send(f"{ctx.author.mention} 用法：`{COMMAND_PREFIX}出售 [物品名] [数量]`，例如 `{COMMAND_PREFIX}出售 铜矿石 5`")
-        player = self._get_player(uid)
+        player = await get_player(uid)
         if not player or player["is_dead"]:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
 
@@ -343,7 +340,6 @@ class EquipmentCog(commands.Cog, name="Equipment"):
             return await ctx.send(f"{ctx.author.mention} 数量需大于 0。")
 
         from utils.items import ITEMS
-        from utils.db import get_inventory, remove_item
         item_info = ITEMS.get(item_name)
         if not item_info:
             return await ctx.send(f"{ctx.author.mention} 未知物品「{item_name}」。")
@@ -351,22 +347,22 @@ class EquipmentCog(commands.Cog, name="Equipment"):
         if sell_price <= 0:
             return await ctx.send(f"{ctx.author.mention} 「{item_name}」无法出售。")
 
-        inv = get_inventory(uid)
+        inv = await get_inventory(uid)
         owned = inv.get(item_name, 0)
         if owned < quantity:
             return await ctx.send(f"{ctx.author.mention} 背包中只有 **{owned}** 个「{item_name}」。")
 
         total = sell_price * quantity
-        ok = remove_item(uid, item_name, quantity)
+        ok = await remove_item(uid, item_name, quantity)
         if not ok:
             return await ctx.send(f"{ctx.author.mention} 出售失败。")
 
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE players SET spirit_stones = spirit_stones + ? WHERE discord_id = ?",
-                (total, uid)
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET spirit_stones = spirit_stones + :amt WHERE discord_id = :uid"),
+                {"amt": total, "uid": uid}
             )
-            conn.commit()
+            await session.commit()
 
         await ctx.send(
             f"{ctx.author.mention} 出售 **{item_name}** ×{quantity}，获得 **{total} 灵石**"

@@ -124,15 +124,24 @@ class GatherButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         import time as _time
+        import math
+        from sqlalchemy import text
+        from utils.db_async import AsyncSessionLocal
         from utils.character import years_to_seconds, seconds_to_years
-        from utils.db import get_conn
 
         await interaction.response.defer()
         view: GatherView = self.view
         uid = str(interaction.user.id)
 
-        with get_conn() as conn:
-            player = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
+        async with AsyncSessionLocal() as session:
+            r = await session.execute(text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid})
+            row = r.fetchone()
+            player = dict(row._mapping) if row else None
+
+        if not player:
+            await interaction.followup.send("数据异常。", ephemeral=True)
+            view.stop()
+            return
 
         now = _time.time()
         if player["cultivating_until"] and now < player["cultivating_until"]:
@@ -157,7 +166,6 @@ class GatherButton(discord.ui.Button):
         actual_years = max(0.25, actual_years)
 
         gathering_until = now + years_to_seconds(actual_years)
-        import math
         lifespan_cost = math.ceil(actual_years) if actual_years > 0 else 0
         new_lifespan = player["lifespan"] - lifespan_cost
 
@@ -170,18 +178,18 @@ class GatherButton(discord.ui.Button):
             _, active_buffs_raw = consume_once_buff(active_buffs_raw, "gather_cooldown_reduction")
             buffs_changed = True
 
-        with get_conn() as conn:
+        async with AsyncSessionLocal() as session:
             if buffs_changed:
-                conn.execute(
-                    "UPDATE players SET gathering_until = ?, gathering_type = ?, lifespan = ?, last_active = ?, active_buffs = ?, gathering_bonus = ? WHERE discord_id = ?",
-                    (gathering_until, view.gather_type, new_lifespan, now, active_buffs_raw, gather_bonus, uid)
+                await session.execute(
+                    text("UPDATE players SET gathering_until = :gu, gathering_type = :gt, lifespan = :ls, last_active = :la, active_buffs = :ab, gathering_bonus = :gb WHERE discord_id = :uid"),
+                    {"gu": gathering_until, "gt": view.gather_type, "ls": new_lifespan, "la": now, "ab": active_buffs_raw, "gb": gather_bonus, "uid": uid}
                 )
             else:
-                conn.execute(
-                    "UPDATE players SET gathering_until = ?, gathering_type = ?, lifespan = ?, last_active = ?, gathering_bonus = ? WHERE discord_id = ?",
-                    (gathering_until, view.gather_type, new_lifespan, now, gather_bonus, uid)
+                await session.execute(
+                    text("UPDATE players SET gathering_until = :gu, gathering_type = :gt, lifespan = :ls, last_active = :la, gathering_bonus = :gb WHERE discord_id = :uid"),
+                    {"gu": gathering_until, "gt": view.gather_type, "ls": new_lifespan, "la": now, "gb": gather_bonus, "uid": uid}
                 )
-            conn.commit()
+            await session.commit()
 
         real_time = actual_years * 2
         unit = "小时" if real_time >= 1 else "分钟"

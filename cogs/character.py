@@ -7,7 +7,8 @@ import discord
 from discord.ext import commands
 
 from utils.character import QUESTIONS, calc_stats, roll_spirit_root, REALM_LIFESPAN
-from utils.db import get_conn
+from sqlalchemy import text
+from utils.db_async import AsyncSessionLocal, Player
 from utils.player import get_player
 from utils.world import CITIES
 from utils.views.character_create import CharacterCreateView
@@ -65,81 +66,69 @@ class CharacterCog(commands.Cog, name="Character"):
             now = time.time()
             starting_city = random.choice(CITIES)["name"]
 
-            old = get_player(uid)
+            old = await get_player(uid)
             rebirth_bonus = {}
-            with get_conn() as conn:
+            async with AsyncSessionLocal() as session:
                 if old and old["is_dead"]:
                     rebirth_bonus = self._calc_rebirth_bonus(old) if (
                         old.get("sect") == "仙葬谷" or old.get("has_bahongchen")
                     ) else {}
-                    conn.execute(
-                        """
-                        UPDATE players SET
-                            name=?, gender=?, spirit_root=?, spirit_root_type=?,
-                            comprehension=?, physique=?, fortune=?, bone=?, soul=?,
-                            lifespan=?, lifespan_max=?, spirit_stones=?,
-                            cultivation=0, realm='炼气期1层',
-                            cultivating_until=NULL, cultivating_years=NULL,
-                            is_dead=0, is_virgin=1, rebirth_count=rebirth_count,
-                            sect=NULL, sect_rank=NULL, techniques='[]',
-                            dual_partner_id=NULL,
-                            cultivation_overflow=0, current_city=?,
-                            explore_count=0, explore_reset_year=0,
-                            reputation=0, cave=NULL,
-                            active_quest=NULL, quest_due=NULL,
-                            gathering_until=NULL, gathering_type=NULL,
-                            created_at=?, last_active=?
-                        WHERE discord_id=?
-                        """,
-                        (
-                            name,
-                            gender,
-                            spirit_root,
-                            root_type,
-                            stats["comprehension"] + rebirth_bonus.get("comprehension", 0),
-                            stats["physique"] + rebirth_bonus.get("physique", 0),
-                            stats["fortune"] + rebirth_bonus.get("fortune", 0),
-                            stats["bone"] + rebirth_bonus.get("bone", 0),
-                            stats["soul"] + rebirth_bonus.get("soul", 0),
-                            lifespan,
-                            lifespan,
-                            stats["spirit_stones"],
-                            starting_city,
-                            now,
-                            now,
-                            uid,
-                        ),
-                    )
+                    p = await session.get(Player, uid)
+                    p.name = name
+                    p.gender = gender
+                    p.spirit_root = spirit_root
+                    p.spirit_root_type = root_type
+                    p.comprehension = stats["comprehension"] + rebirth_bonus.get("comprehension", 0)
+                    p.physique = stats["physique"] + rebirth_bonus.get("physique", 0)
+                    p.fortune = stats["fortune"] + rebirth_bonus.get("fortune", 0)
+                    p.bone = stats["bone"] + rebirth_bonus.get("bone", 0)
+                    p.soul = stats["soul"] + rebirth_bonus.get("soul", 0)
+                    p.lifespan = lifespan
+                    p.lifespan_max = lifespan
+                    p.spirit_stones = stats["spirit_stones"]
+                    p.cultivation = 0
+                    p.realm = "炼气期1层"
+                    p.cultivating_until = None
+                    p.cultivating_years = None
+                    p.is_dead = False
+                    p.is_virgin = True
+                    p.sect = None
+                    p.sect_rank = None
+                    p.techniques = "[]"
+                    p.dual_partner_id = None
+                    p.cultivation_overflow = 0
+                    p.current_city = starting_city
+                    p.explore_count = 0
+                    p.explore_reset_year = 0
+                    p.reputation = 0
+                    p.cave = None
+                    p.active_quest = None
+                    p.quest_due = None
+                    p.gathering_until = None
+                    p.gathering_type = None
+                    p.created_at = now
+                    p.last_active = now
                 else:
-                    conn.execute(
-                        """
-                        INSERT INTO players (
-                            discord_id, name, gender, spirit_root, spirit_root_type,
-                            comprehension, physique, fortune, bone, soul,
-                            lifespan, lifespan_max, spirit_stones,
-                            created_at, last_active, current_city
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            uid,
-                            name,
-                            gender,
-                            spirit_root,
-                            root_type,
-                            stats["comprehension"],
-                            stats["physique"],
-                            stats["fortune"],
-                            stats["bone"],
-                            stats["soul"],
-                            lifespan,
-                            lifespan,
-                            stats["spirit_stones"],
-                            now,
-                            now,
-                            starting_city,
-                        ),
-                    )
-                conn.commit()
+                    from utils.db_async import Player as _Player
+                    session.add(_Player(
+                        discord_id=uid,
+                        name=name,
+                        gender=gender,
+                        spirit_root=spirit_root,
+                        spirit_root_type=root_type,
+                        comprehension=stats["comprehension"],
+                        physique=stats["physique"],
+                        fortune=stats["fortune"],
+                        bone=stats["bone"],
+                        soul=stats["soul"],
+                        lifespan=lifespan,
+                        lifespan_max=lifespan,
+                        spirit_stones=stats["spirit_stones"],
+                        created_at=now,
+                        last_active=now,
+                        current_city=starting_city,
+                    ))
+                await session.commit()
 
             speed_label = {
                 "单灵根": "极快",
@@ -175,7 +164,7 @@ class CharacterCog(commands.Cog, name="Character"):
     @commands.hybrid_command(name="创建角色", aliases=["cjjs"], description="创建新的修仙角色，开辟修行之路")
     async def create_character(self, ctx, mode: Optional[str] = None):
         uid = str(ctx.author.id)
-        existing = get_player(uid)
+        existing = await get_player(uid)
         if existing and not existing["is_dead"]:
             return await ctx.send(f"{ctx.author.mention} 道友已踏入修仙之路，无需重新创建。")
         if uid in self._creating:
@@ -213,7 +202,7 @@ class CharacterCog(commands.Cog, name="Character"):
     async def help_cmd(self, ctx):
         import json
         uid = str(ctx.author.id)
-        player = get_player(uid)
+        player = await get_player(uid)
         has_dual = False
         if player:
             has_dual = any(

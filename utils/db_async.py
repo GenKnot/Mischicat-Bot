@@ -131,6 +131,7 @@ class WanbaoLot(Base):
     current_bid: Mapped[int] = mapped_column(Integer, default=0)
     bidder_id: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, default="pending")
+    frozen_ids: Mapped[str] = mapped_column(Text, default="[]")
     eq_data: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
@@ -156,3 +157,36 @@ class KnownRecipe(Base):
     discord_id: Mapped[str] = mapped_column(String, primary_key=True)
     recipe_id: Mapped[str] = mapped_column(String, primary_key=True)
     aux_choices: Mapped[str] = mapped_column(String, default="[]")
+
+
+class Party(Base):
+    __tablename__ = "parties"
+
+    party_id: Mapped[str] = mapped_column(String, primary_key=True)
+    leader_id: Mapped[str] = mapped_column(String, nullable=False)
+    city: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class PublicEvent(Base):
+    __tablename__ = "public_events"
+
+    event_id: Mapped[str] = mapped_column(String, primary_key=True)
+    event_type: Mapped[str] = mapped_column(String, nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    started_at: Mapped[float] = mapped_column(Float, nullable=False)
+    ends_at: Mapped[float] = mapped_column(Float, nullable=False)
+    channel_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    message_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="active")
+    data: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class PublicEventParticipant(Base):
+    __tablename__ = "public_event_participants"
+
+    event_id: Mapped[str] = mapped_column(String, primary_key=True)
+    discord_id: Mapped[str] = mapped_column(String, primary_key=True)
+    activity: Mapped[str | None] = mapped_column(String, primary_key=True, nullable=True)
+    joined_at: Mapped[float] = mapped_column(Float, nullable=False)
+    contribution: Mapped[int] = mapped_column(Integer, default=0)

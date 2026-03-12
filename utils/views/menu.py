@@ -4,12 +4,17 @@ from utils.sects import SECTS, check_requirements
 
 
 def _get_event_hint() -> str:
-    import json, time as _time
-    from utils.db import get_conn
-    with get_conn() as conn:
+    import sqlite3, os, time as _time
+    db_path = os.getenv("DB_PATH", "game.db")
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT title, status, ends_at FROM public_events WHERE status IN ('active', 'pending') ORDER BY started_at DESC LIMIT 1"
         ).fetchone()
+        conn.close()
+    except Exception:
+        return "每日 22:00（北美东部时间）触发，天下修士皆可参与"
     if not row:
         return "每日 22:00（北美东部时间）触发，天下修士皆可参与"
     if row["status"] == "active":
@@ -258,16 +263,20 @@ class MenuButton(discord.ui.Button):
 
         if self.action == "party_info":
             from utils.views.party import party_info_embed
-            from utils.db import get_conn
+            from sqlalchemy import text
+            from utils.db_async import AsyncSessionLocal
             uid = str(interaction.user.id)
-            with get_conn() as conn:
-                player = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
+            async with AsyncSessionLocal() as session:
+                res = await session.execute(text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid})
+                row = res.fetchone()
+                player = dict(row._mapping)
                 party_id = player.get("party_id")
                 if not party_id:
                     return await interaction.response.send_message("你不在任何队伍中。", ephemeral=True)
-                members = [dict(r) for r in conn.execute(
-                    "SELECT * FROM players WHERE party_id = ?", (party_id,)).fetchall()]
-                leader = dict(conn.execute("SELECT leader_id FROM parties WHERE party_id = ?", (party_id,)).fetchone())
+                res2 = await session.execute(text("SELECT * FROM players WHERE party_id = :pid"), {"pid": party_id})
+                members = [dict(r._mapping) for r in res2.fetchall()]
+                res3 = await session.execute(text("SELECT leader_id FROM parties WHERE party_id = :pid"), {"pid": party_id})
+                leader = dict(res3.fetchone()._mapping)
             await interaction.response.send_message(
                 embed=party_info_embed(members, leader["leader_id"]),
                 ephemeral=True,
@@ -292,7 +301,7 @@ class MenuButton(discord.ui.Button):
                 await cog.send_profile(interaction)
             elif self.action == "cultivate":
                 from utils.events.public.wanbao import is_auction_locked
-                if is_auction_locked(str(interaction.user.id)):
+                if await is_auction_locked(str(interaction.user.id)):
                     await interaction.followup.send("拍卖会进行中，在万宝楼内无法闭关修炼。", ephemeral=True)
                 else:
                     await cog.send_cultivate(interaction)
@@ -318,13 +327,15 @@ class MenuButton(discord.ui.Button):
                     await interaction.followup.send("茶馆暂时不可用。", ephemeral=True)
             elif self.action == "city":
                 from utils.views.city import CityMenuView, _city_menu_embed
-                from utils.db import get_conn as _gc
+                from sqlalchemy import text
+                from utils.db_async import AsyncSessionLocal
                 uid = str(interaction.user.id)
-                with _gc() as conn:
-                    player = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
+                async with AsyncSessionLocal() as session:
+                    _res = await session.execute(text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid})
+                    player = dict(_res.fetchone()._mapping)
                 await interaction.followup.edit_message(
                     message_id=interaction.message.id,
-                    embed=_city_menu_embed(player),
+                    embed=await _city_menu_embed(player),
                     view=CityMenuView(interaction.user, player, cog),
                 )
             elif self.action == "backpack":
@@ -336,9 +347,10 @@ class MenuButton(discord.ui.Button):
                 else:
                     await interaction.followup.send("背包系统暂时不可用。", ephemeral=True)
             elif self.action == "techniques":
-                from utils.views.techniques import TechniquesView, _build_techniques_embed, _get_player as _tech_get_player
+                from utils.views.techniques import TechniquesView, _build_techniques_embed
+                from utils.player import get_player as _get_player
                 uid = str(interaction.user.id)
-                player = _tech_get_player(uid)
+                player = await _get_player(uid)
                 if not player:
                     await interaction.followup.send("尚未踏入修仙之路。", ephemeral=True)
                 else:
@@ -347,12 +359,14 @@ class MenuButton(discord.ui.Button):
                     await interaction.followup.send(embed=embed, view=view)
             elif self.action == "equipment":
                 from utils.views.equipment import EquipmentManageView, _build_equipment_embed
-                from utils.db import get_equipment_list, get_conn as _gc
+                from utils.equipment_db import get_equipment_list
+                from sqlalchemy import text
+                from utils.db_async import AsyncSessionLocal
                 uid = str(interaction.user.id)
-                with _gc() as conn:
-                    row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
-                    player = dict(row)
-                equips = get_equipment_list(uid)
+                async with AsyncSessionLocal() as session:
+                    res = await session.execute(text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid})
+                    player = dict(res.fetchone()._mapping)
+                equips = await get_equipment_list(uid)
                 embed = _build_equipment_embed(player, equips)
                 view = EquipmentManageView(interaction.user, cog)
                 await interaction.followup.edit_message(message_id=interaction.message.id, embed=embed, view=view)
@@ -366,22 +380,25 @@ class MenuButton(discord.ui.Button):
             elif self.action.startswith("gather:"):
                 gather_type = self.action[len("gather:"):]
                 from utils.views.gathering import GatherView, TYPE_EMOJI
-                from utils.db import get_conn
+                from utils.db_async import AsyncSessionLocal, Player as _Player
+                from sqlalchemy import text as _text
                 from utils.character import seconds_to_years
                 import time as _time
                 uid = str(interaction.user.id)
-                with get_conn() as conn:
-                    player = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
+                async with AsyncSessionLocal() as session:
+                    _p = await session.get(_Player, uid)
+                    player = {c.key: getattr(_p, c.key) for c in _p.__table__.columns} if _p else None
+                    defense_row = (await session.execute(
+                        _text(
+                            "SELECT 1 FROM public_event_participants ep "
+                            "JOIN public_events e ON ep.event_id = e.event_id "
+                            "WHERE ep.discord_id = :uid AND ep.activity = 'defense' AND e.status = 'active'"
+                        ),
+                        {"uid": uid}
+                    )).fetchone()
                 now = _time.time()
-                with get_conn() as conn:
-                    defense_row = conn.execute(
-                        "SELECT 1 FROM public_event_participants ep "
-                        "JOIN public_events e ON ep.event_id = e.event_id "
-                        "WHERE ep.discord_id = ? AND ep.activity = 'defense' AND e.status = 'active'",
-                        (uid,)
-                    ).fetchone()
                 from utils.events.public.wanbao import is_auction_locked
-                if is_auction_locked(uid):
+                if await is_auction_locked(uid):
                     await interaction.followup.send("拍卖会进行中，在万宝楼内无法采集。", ephemeral=True)
                 elif defense_row:
                     await interaction.followup.send("守城期间无法采集，专心守城！", ephemeral=True)
@@ -430,12 +447,12 @@ class MenuButton(discord.ui.Button):
                     await interaction.followup.send("万宝楼系统暂时不可用。", ephemeral=True)
             elif self.action == "dange_exam":
                 from utils.views.dange import DangeView
-                from utils.db import get_conn as _gc
                 from utils.db_async import AsyncSessionLocal, Player as _Player
                 uid = str(interaction.user.id)
-                with _gc() as conn:
-                    row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
-                    player = dict(row)
+                async with AsyncSessionLocal() as session:
+                    _p = await session.get(_Player, uid)
+                    player = {c.key: getattr(_p, c.key) for c in _p.__table__.columns} if _p else {}
+                    paid = (_p.exam_attempts_left > 0) if _p else False
                 if player.get("alchemy_level", 0) > 0:
                     await interaction.followup.send("你已经是炼丹师了，无需再考核。", ephemeral=True)
                 elif player.get("fortune", 0) < 3 or player.get("soul", 0) < 3:
@@ -445,9 +462,6 @@ class MenuButton(discord.ui.Button):
                         ephemeral=True,
                     )
                 else:
-                    async with AsyncSessionLocal() as session:
-                        p = await session.get(_Player, uid)
-                        paid = (p.exam_attempts_left > 0) if p else False
                     view = DangeView(interaction.user, cog, player, paid=paid)
                     view.set_paid(paid)
                     from utils.views.dange import _elder_greeting, _elder_greeting_paid
@@ -472,28 +486,36 @@ class MenuButton(discord.ui.Button):
                     )
             elif self.action == "back_to_menu":
                 import json
+                from utils.player import get_player as _get_player, settle_time, apply_updates, can_breakthrough as _can_bt
+                from utils.db_async import AsyncSessionLocal, Player as _Player
+                from sqlalchemy import select as _select
                 uid = str(interaction.user.id)
-                player = cog._get_player(uid)
+                player = await _get_player(uid)
                 if player and not player["is_dead"]:
-                    updates, _ = cog._settle_time(player)
-                    cog._apply_updates(uid, updates)
-                    player = cog._get_player(uid)
+                    updates, _ = await settle_time(player)
+                    if updates:
+                        await apply_updates(uid, updates)
+                    player = await _get_player(uid)
                 has_player = player is not None and not player["is_dead"]
-                can_bt = has_player and cog._can_breakthrough(player)
+                can_bt = has_player and _can_bt(player)
                 has_dual = has_player and any(
                     (t if isinstance(t, str) else t.get("name", "")) == "双修功法"
                     for t in json.loads(player["techniques"] or "[]")
                 )
                 city_players = []
                 if has_player:
-                    from utils.db import get_conn as _gc
-                    with _gc() as conn:
-                        rows = conn.execute(
-                            "SELECT discord_id, name, realm, cultivation FROM players "
-                            "WHERE current_city = ? AND is_dead = 0 AND discord_id != ?",
-                            (player["current_city"], uid)
-                        ).fetchall()
-                    city_players = [dict(r) for r in rows]
+                    async with AsyncSessionLocal() as session:
+                        rows = (await session.execute(
+                            _select(_Player).where(
+                                _Player.current_city == player["current_city"],
+                                _Player.is_dead == 0,
+                                _Player.discord_id != uid,
+                            )
+                        )).scalars().all()
+                    city_players = [
+                        {"discord_id": r.discord_id, "name": r.name, "realm": r.realm, "cultivation": r.cultivation}
+                        for r in rows
+                    ]
                 await interaction.followup.send(
                     embed=_build_menu_embed(has_dual, gameplay_only=True),
                     view=MainMenuView(interaction.user, has_player, can_bt, cog, player, city_players)

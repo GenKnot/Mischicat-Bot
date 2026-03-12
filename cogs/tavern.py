@@ -145,7 +145,7 @@ class TavernCog(commands.Cog, name="Tavern"):
 
             if player.current_city == "万宝楼":
                 from utils.events.public.wanbao import get_active_auction
-                auction = get_active_auction()
+                auction = await get_active_auction()
                 if auction and auction["status"] == "active":
                     return await ctx.send(f"{ctx.author.mention} 万宝楼拍卖会进行中，茶馆暂停营业。请前往其他城市接取任务。")
 
@@ -274,17 +274,14 @@ class TavernCog(commands.Cog, name="Tavern"):
         if str(ctx.author.id) != "304758476448595970":
             return
         uid = target_id or str(ctx.author.id)
-        from utils.db import get_conn
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE players SET job_cooldown_until = 0, job_daily_count = 0, job_daily_reset = 0 WHERE discord_id = ?",
-                (uid,)
-            )
-            conn.commit()
-        row = None
-        with get_conn() as conn:
-            row = conn.execute("SELECT name FROM players WHERE discord_id = ?", (uid,)).fetchone()
-        name = row["name"] if row else uid
+        async with AsyncSessionLocal() as session:
+            p = await session.get(Player, uid)
+            if p:
+                p.job_cooldown_until = 0
+                p.job_daily_count = 0
+                p.job_daily_reset = 0
+                await session.commit()
+            name = p.name if p else uid
         await ctx.send(f"已重置 **{name}** 的打工冷却与次数。", ephemeral=True)
 
     @commands.command(name="重置签到", hidden=True)
@@ -292,13 +289,27 @@ class TavernCog(commands.Cog, name="Tavern"):
         if str(ctx.author.id) != "304758476448595970":
             return
         uid = target_id or str(ctx.author.id)
-        from utils.db import get_conn
-        with get_conn() as conn:
-            conn.execute("UPDATE players SET checkin_last_date = NULL WHERE discord_id = ?", (uid,))
-            conn.commit()
-            row = conn.execute("SELECT name FROM players WHERE discord_id = ?", (uid,)).fetchone()
-        name = row["name"] if row else uid
+        async with AsyncSessionLocal() as session:
+            p = await session.get(Player, uid)
+            if p:
+                p.checkin_last_date = None
+                await session.commit()
+            name = p.name if p else uid
         await ctx.send(f"已重置 **{name}** 的每日签到。", ephemeral=True)
+
+    @commands.command(name="重置赌坊", hidden=True)
+    async def reset_gamble(self, ctx, target_id: str = None):
+        if str(ctx.author.id) != "304758476448595970":
+            return
+        uid = target_id or str(ctx.author.id)
+        async with AsyncSessionLocal() as session:
+            p = await session.get(Player, uid)
+            if p:
+                p.gamble_daily_count = 0
+                p.gamble_daily_reset = 0
+                await session.commit()
+            name = p.name if p else uid
+        await ctx.send(f"已重置 **{name}** 的赌坊次数。", ephemeral=True)
 
 
 class TavernView(discord.ui.View):
@@ -357,7 +368,7 @@ class QuestButton(discord.ui.Button):
                     "techniques": player.techniques,
                     "equipment": player.equipment,
                 }
-                player_power = calc_power(player_dict)
+                player_power = await calc_power(player_dict)
                 enemy_power = q["enemy"]["power"]
                 diff = player_power - enemy_power
                 if diff > 20:

@@ -139,11 +139,11 @@ async def start_dual_cultivation(inviter_id: str, target_id: str) -> dict:
         cultivating_until = now + years_to_seconds(years)
         
         inv_base = calc_cultivation_gain(years, inviter.comprehension, inviter.spirit_root_type)
-        inv_bonus = get_cultivation_bonus(inviter_id, inviter.current_city, inviter.cave)
+        inv_bonus = await get_cultivation_bonus(inviter_id, inviter.current_city, inviter.cave)
         inv_gain = int(inv_base * (1 + inv_bonus) * multiplier)
         
         tgt_base = calc_cultivation_gain(years, target.comprehension, target.spirit_root_type)
-        tgt_bonus = get_cultivation_bonus(target_id, target.current_city, target.cave)
+        tgt_bonus = await get_cultivation_bonus(target_id, target.current_city, target.cave)
         tgt_gain = int(tgt_base * (1 + tgt_bonus) * multiplier)
         
         inviter.lifespan -= years

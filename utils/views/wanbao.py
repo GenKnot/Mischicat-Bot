@@ -1,17 +1,13 @@
 import discord
 import time
-from utils.db import get_conn
+from sqlalchemy import text
+from utils.db_async import AsyncSessionLocal
+from utils.player import get_player
 from utils.events.public.wanbao import (
     get_active_auction, get_lots, get_current_lot,
     place_bid, list_item, can_list_item,
     WANBAO_CITY, LISTING_FEE, MAX_PLAYER_LOTS, LOT_DURATION,
 )
-
-
-def _get_player(uid: str) -> dict | None:
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
-    return dict(row) if row else None
 
 
 def _item_display(lot: dict) -> str:
@@ -154,31 +150,31 @@ class WanbaoMainView(discord.ui.View):
 
     @discord.ui.button(label="查看拍品", style=discord.ButtonStyle.primary)
     async def view_lots(self, interaction: discord.Interaction, button: discord.ui.Button):
-        auction = get_active_auction()
+        auction = await get_active_auction()
         if not auction:
             return await interaction.response.send_message("当前没有进行中的拍卖。", ephemeral=True)
-        lots = get_lots(auction["auction_id"])
+        lots = await get_lots(auction["auction_id"])
         embed = build_lots_list_embed(auction, lots)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="当前拍品出价", style=discord.ButtonStyle.success)
     async def bid_current(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.response.send_message("尚未创建角色。", ephemeral=True)
         if player["current_city"] != WANBAO_CITY:
             return await interaction.response.send_message("需在万宝楼城内方可参与竞拍。", ephemeral=True)
 
-        auction = get_active_auction()
+        auction = await get_active_auction()
         if not auction or auction["status"] != "active":
             return await interaction.response.send_message("拍卖尚未开始。", ephemeral=True)
 
-        lot = get_current_lot(auction["auction_id"])
+        lot = await get_current_lot(auction["auction_id"])
         if not lot:
             return await interaction.response.send_message("当前无进行中的拍品。", ephemeral=True)
 
-        lots = get_lots(auction["auction_id"])
+        lots = await get_lots(auction["auction_id"])
         total = len(lots)
         embed = build_lot_embed(lot, auction["ends_at"], lot["lot_index"], total)
         view = BidView(self.author, auction["auction_id"], lot, auction["ends_at"], lot["lot_index"], total, self.pe_cog)
@@ -187,19 +183,19 @@ class WanbaoMainView(discord.ui.View):
     @discord.ui.button(label="上架物品", style=discord.ButtonStyle.secondary)
     async def list_item_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.response.send_message("尚未创建角色。", ephemeral=True)
         if player["current_city"] != WANBAO_CITY:
             return await interaction.response.send_message("需在万宝楼城内方可上架物品。", ephemeral=True)
 
-        auction = get_active_auction()
+        auction = await get_active_auction()
         if not auction:
             return await interaction.response.send_message("当前没有拍卖活动。", ephemeral=True)
         if auction["status"] == "active":
             return await interaction.response.send_message("拍卖已开始，无法继续上架。", ephemeral=True)
 
-        ok, msg = can_list_item(uid, auction["auction_id"])
+        ok, msg = await can_list_item(uid, auction["auction_id"])
         if not ok:
             return await interaction.response.send_message(msg, ephemeral=True)
 
@@ -224,35 +220,42 @@ class PublicBidView(discord.ui.View):
 
     async def _do_bid(self, interaction: discord.Interaction, increment: int):
         uid = str(interaction.user.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.response.send_message("尚未创建角色。", ephemeral=True)
         if player["current_city"] != WANBAO_CITY:
             return await interaction.response.send_message("需在万宝楼城内方可参与竞拍。", ephemeral=True)
 
-        with get_conn() as conn:
-            lot_row = conn.execute(
-                "SELECT * FROM wanbao_lots WHERE auction_id = ? AND lot_index = ? AND status = 'active'",
-                (self.auction_id, self.lot_index)
-            ).fetchone()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text(
+                    "SELECT * FROM wanbao_lots WHERE auction_id = :aid AND lot_index = :li AND status = 'active'"
+                ),
+                {"aid": self.auction_id, "li": self.lot_index},
+            )
+            lot_row = result.fetchone()
         if not lot_row:
             return await interaction.response.send_message("此拍品已结束。", ephemeral=True)
 
-        lot = dict(lot_row)
+        lot = dict(lot_row._mapping)
         current = lot["current_bid"] if lot["current_bid"] > 0 else lot["start_price"]
         new_bid = current + increment
 
-        ok, msg = place_bid(self.auction_id, uid, new_bid)
+        ok, msg = await place_bid(self.auction_id, uid, new_bid)
         if not ok:
             return await interaction.response.send_message(msg, ephemeral=True)
 
-        with get_conn() as conn:
-            auction = conn.execute("SELECT * FROM wanbao_auctions WHERE auction_id = ?", (self.auction_id,)).fetchone()
-            lot_row = conn.execute(
-                "SELECT * FROM wanbao_lots WHERE auction_id = ? AND lot_index = ?",
-                (self.auction_id, self.lot_index)
-            ).fetchone()
-        lot = dict(lot_row)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT * FROM wanbao_auctions WHERE auction_id = :aid"),
+                {"aid": self.auction_id},
+            )
+            auction = dict(result.fetchone()._mapping)
+            result2 = await session.execute(
+                text("SELECT * FROM wanbao_lots WHERE auction_id = :aid AND lot_index = :li"),
+                {"aid": self.auction_id, "li": self.lot_index},
+            )
+            lot = dict(result2.fetchone()._mapping)
         embed = build_lot_embed(lot, auction["ends_at"], self.lot_index, self.total)
         name = player["name"] if player else str(interaction.user)
         embed.add_field(name="最新出价", value=f"**{name}** 出价 **{new_bid} 灵石**", inline=False)
@@ -298,27 +301,34 @@ class BidView(discord.ui.View):
 
     async def _do_bid(self, interaction: discord.Interaction, increment: int):
         uid = str(interaction.user.id)
-        with get_conn() as conn:
-            lot_row = conn.execute(
-                "SELECT * FROM wanbao_lots WHERE auction_id = ? AND lot_index = ? AND status = 'active'",
-                (self.auction_id, self.lot_index)
-            ).fetchone()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text(
+                    "SELECT * FROM wanbao_lots WHERE auction_id = :aid AND lot_index = :li AND status = 'active'"
+                ),
+                {"aid": self.auction_id, "li": self.lot_index},
+            )
+            lot_row = result.fetchone()
         if not lot_row:
             return await interaction.response.send_message("此拍品已结束。", ephemeral=True)
-        lot = dict(lot_row)
+        lot = dict(lot_row._mapping)
         current = lot["current_bid"] if lot["current_bid"] > 0 else lot["start_price"]
         new_bid = current + increment
-        ok, msg = place_bid(self.auction_id, uid, new_bid)
+        ok, msg = await place_bid(self.auction_id, uid, new_bid)
         if not ok:
             return await interaction.response.send_message(msg, ephemeral=True)
 
-        with get_conn() as conn:
-            auction = conn.execute("SELECT * FROM wanbao_auctions WHERE auction_id = ?", (self.auction_id,)).fetchone()
-            lot_row = conn.execute(
-                "SELECT * FROM wanbao_lots WHERE auction_id = ? AND lot_index = ?",
-                (self.auction_id, self.lot_index)
-            ).fetchone()
-        lot = dict(lot_row)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT * FROM wanbao_auctions WHERE auction_id = :aid"),
+                {"aid": self.auction_id},
+            )
+            auction = dict(result.fetchone()._mapping)
+            result2 = await session.execute(
+                text("SELECT * FROM wanbao_lots WHERE auction_id = :aid AND lot_index = :li"),
+                {"aid": self.auction_id, "li": self.lot_index},
+            )
+            lot = dict(result2.fetchone()._mapping)
         embed = build_lot_embed(lot, auction["ends_at"], self.lot_index, self.total)
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -343,6 +353,9 @@ class BidView(discord.ui.View):
         await self._do_bid(interaction, 1000)
 
 
+WanbaoView = WanbaoMainView
+
+
 class ListItemModal(discord.ui.Modal, title="上架拍品"):
     item_name = discord.ui.TextInput(label="物品名称", placeholder="例：雷云芝", max_length=30)
     quantity = discord.ui.TextInput(label="数量", placeholder="例：20", max_length=5)
@@ -362,7 +375,7 @@ class ListItemModal(discord.ui.Modal, title="上架拍品"):
         if qty <= 0 or price <= 0:
             return await interaction.response.send_message("数量和起拍价必须大于0。", ephemeral=True)
 
-        ok, msg = list_item(self.auction_id, uid, self.item_name.value.strip(), qty, price)
+        ok, msg = await list_item(self.auction_id, uid, self.item_name.value.strip(), qty, price)
         if ok:
             await interaction.response.send_message(
                 f"{msg}\n上架手续费 **{LISTING_FEE} 灵石** 已扣除。流拍时需额外支付 {LISTING_FEE} 灵石取回费。",

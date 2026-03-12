@@ -11,20 +11,22 @@ TIER_COLORS = {
 }
 
 
-def _jobs_overview_embed(player: dict) -> discord.Embed:
-    from utils.db import get_conn
+async def _jobs_overview_embed(player: dict) -> discord.Embed:
+    from sqlalchemy import text
+    from utils.db_async import AsyncSessionLocal
     import time
     uid = player["discord_id"]
     now = time.time()
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT job_cooldown_until, job_daily_count, job_daily_reset FROM players WHERE discord_id = ?",
-            (uid,)
-        ).fetchone()
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("SELECT job_cooldown_until, job_daily_count, job_daily_reset FROM players WHERE discord_id = :uid"),
+            {"uid": uid},
+        )
+        row = result.fetchone()
 
-    cooldown_until = row["job_cooldown_until"] or 0 if row else 0
-    daily_count = row["job_daily_count"] or 0 if row else 0
-    daily_reset = row["job_daily_reset"] or 0 if row else 0
+    cooldown_until = row.job_cooldown_until or 0 if row else 0
+    daily_count = row.job_daily_count or 0 if row else 0
+    daily_reset = row.job_daily_reset or 0 if row else 0
 
     reset_date = time.gmtime(daily_reset)
     now_date = time.gmtime(now)
@@ -108,14 +110,16 @@ class JobButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        from utils.db import get_conn
+        from sqlalchemy import text
+        from utils.db_async import AsyncSessionLocal
         from utils.jobs import do_job, _check_req
         uid = str(interaction.user.id)
-        with get_conn() as conn:
-            row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid})
+            row = result.fetchone()
             if not row:
                 return await interaction.followup.send("角色不存在。", ephemeral=True)
-            player = dict(row)
+            player = dict(row._mapping)
 
         if not _check_req(player, self.job["req"]):
             return await interaction.followup.send("你已不满足此工作的要求。", ephemeral=True)
@@ -149,8 +153,9 @@ class JobButton(discord.ui.Button):
 
         embed.set_footer(text="冷却 30 分钟后可再次打工")
 
-        with get_conn() as conn:
-            updated = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
+        async with AsyncSessionLocal() as session:
+            res2 = await session.execute(text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid})
+            updated = dict(res2.fetchone()._mapping)
 
         await interaction.followup.send(
             embed=embed,
@@ -164,11 +169,13 @@ class BackToCityButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         from utils.views.city import CityMenuView, _city_menu_embed
-        from utils.db import get_conn
+        from sqlalchemy import text
+        from utils.db_async import AsyncSessionLocal
         uid = str(interaction.user.id)
-        with get_conn() as conn:
-            player = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid})
+            player = dict(result.fetchone()._mapping)
         await interaction.response.edit_message(
-            embed=_city_menu_embed(player),
+            embed=await _city_menu_embed(player),
             view=CityMenuView(interaction.user, player, self.view.cog),
         )

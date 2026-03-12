@@ -1,4 +1,6 @@
 import discord
+from sqlalchemy import text
+from utils.db_async import AsyncSessionLocal
 
 
 def _crafting_overview_embed() -> discord.Embed:
@@ -74,11 +76,14 @@ class CraftingMenuView(discord.ui.View):
     async def alchemy_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         from utils.views.alchemy import AlchemyMainView
         from utils.alchemy import get_known_recipes_with_choices
-        from utils.db import get_conn
         uid = str(interaction.user.id)
-        with get_conn() as conn:
-            row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
-            player = dict(row)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT * FROM players WHERE discord_id = :uid"),
+                {"uid": uid},
+            )
+            row = result.fetchone()
+            player = dict(row._mapping)
         if player.get("alchemy_level", 0) == 0 and player.get("current_city") != "丹阁":
             await interaction.response.send_message(
                 "你尚未入门炼丹之道。\n前往**中州·丹阁**参加入门考核，获得炼丹师资质后方可开炉。",
@@ -86,7 +91,6 @@ class CraftingMenuView(discord.ui.View):
             )
             return
         has_yanhuo = bool(player.get("yanhuo"))
-        from utils.alchemy import get_known_recipes_with_choices
         known_map = await get_known_recipes_with_choices(uid)
         view = AlchemyMainView(self.author, player, has_yanhuo, set(known_map.keys()), cog=self.cog, known_choices=known_map)
         await interaction.response.edit_message(
@@ -116,3 +120,6 @@ class CraftingMenuView(discord.ui.View):
         from utils.views.world import _send_main_menu
         await interaction.response.defer()
         await _send_main_menu(interaction, self.cog)
+
+
+CraftingView = CraftingMenuView

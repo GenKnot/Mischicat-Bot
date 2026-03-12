@@ -16,7 +16,8 @@ def _weighted_choice(tiers: list[dict]) -> dict:
 
 
 async def do_checkin(uid: str) -> dict:
-    from utils.db import add_item, give_equipment
+    from utils.inventory import add_item
+    from utils.equipment_db import give_equipment
     from utils.equipment import generate_equipment
     from utils.sects import TECHNIQUES
 
@@ -46,7 +47,7 @@ async def do_checkin(uid: str) -> dict:
             item_name = random.choice(tier["pool"])
             result["item_name"] = item_name
             result["tier_label"] = tier["label"]
-            add_item(uid, item_name, 1)
+            await add_item(uid, item_name, 1)
 
         elif category == "technique":
             tier = _weighted_choice(CONFIG["technique"]["tiers"])
@@ -66,7 +67,7 @@ async def do_checkin(uid: str) -> dict:
         elif category == "equipment":
             tier = _weighted_choice(CONFIG["equipment"]["tiers"])
             eq = generate_equipment(quality=tier["quality"])
-            give_equipment(uid, eq)
+            await give_equipment(uid, eq)
             result["equipment"] = eq
             result["tier_label"] = tier["label"]
 

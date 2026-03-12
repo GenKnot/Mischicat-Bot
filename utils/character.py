@@ -205,29 +205,39 @@ def get_effective_lifespan_max(player: dict) -> int:
     return base + bonus
 
 
-def get_cultivation_bonus(discord_id: str, current_city: str, cave: str) -> float:
-    from utils.db import has_residence, get_conn
+def format_player_profile(player: dict) -> str:
+    return player.get("name", "未知")
+
+
+async def get_cultivation_bonus(discord_id: str, current_city: str, cave: str) -> float:
+    from utils.residence import has_residence
+    from sqlalchemy import text
+    from utils.db_async import AsyncSessionLocal
     import json
     bonus = 0.0
-    if has_residence(discord_id, current_city):
+    if await has_residence(discord_id, current_city):
         bonus += RESIDENCE_BONUS
     if cave:
         bonus += CAVE_BONUS
-    with get_conn() as conn:
-        row = conn.execute("SELECT techniques FROM players WHERE discord_id = ?", (discord_id,)).fetchone()
-    if row and row["techniques"]:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("SELECT techniques FROM players WHERE discord_id = :uid"),
+            {"uid": discord_id}
+        )
+        row = result.fetchone()
+    if row and row[0]:
         from utils.sects import calc_technique_stat_bonus
-        techs = json.loads(row["techniques"])
+        techs = json.loads(row[0])
         stat_bonus = calc_technique_stat_bonus(techs)
         speed_val = stat_bonus.get("cultivation_speed", 0)
         bonus += speed_val
     return bonus
 
 
-def get_explore_limit_bonus(discord_id: str, current_city: str, cave: str) -> int:
-    from utils.db import has_residence
+async def get_explore_limit_bonus(discord_id: str, current_city: str, cave: str) -> int:
+    from utils.residence import has_residence
     bonus = 0
-    if has_residence(discord_id, current_city):
+    if await has_residence(discord_id, current_city):
         bonus += RESIDENCE_EXPLORE_BONUS
     if cave:
         bonus += CAVE_EXPLORE_BONUS

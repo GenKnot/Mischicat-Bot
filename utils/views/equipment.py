@@ -1,12 +1,6 @@
 import discord
-from utils.db import get_conn, get_equipment_list, equip_item, unequip_item, discard_equipment
+from utils.equipment_db import get_equipment_list, equip_item, unequip_item, discard_equipment
 from utils.equipment import QUALITY_COLOR, STAT_NAMES, TIER_NAMES, get_player_tier, equip_stat_bonus
-
-
-def _get_player(uid: str) -> dict | None:
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone()
-        return dict(row) if row else None
 
 
 def _build_equipment_embed(player: dict, equips: list[dict]) -> discord.Embed:
@@ -55,7 +49,7 @@ class EquipmentManageView(discord.ui.View):
     @discord.ui.button(label="装备", style=discord.ButtonStyle.success, row=0)
     async def equip_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        equips = get_equipment_list(uid)
+        equips = await get_equipment_list(uid)
         unequipped = [e for e in equips if not e["equipped"]]
         if not unequipped:
             return await interaction.response.send_message("背包中没有可装备的装备。", ephemeral=True)
@@ -79,7 +73,7 @@ class EquipmentManageView(discord.ui.View):
     @discord.ui.button(label="卸下", style=discord.ButtonStyle.danger, row=0)
     async def unequip_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        equips = get_equipment_list(uid)
+        equips = await get_equipment_list(uid)
         equipped = [e for e in equips if e["equipped"]]
         if not equipped:
             return await interaction.response.send_message("当前没有已装备的装备。", ephemeral=True)
@@ -102,7 +96,7 @@ class EquipmentManageView(discord.ui.View):
     @discord.ui.button(label="丢弃", style=discord.ButtonStyle.secondary, row=0)
     async def discard_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        equips = get_equipment_list(uid)
+        equips = await get_equipment_list(uid)
         if not equips:
             return await interaction.response.send_message("没有任何装备可丢弃。", ephemeral=True)
         options = []
@@ -148,10 +142,11 @@ class _EquipSelectView(discord.ui.View):
 
     @discord.ui.select(placeholder="选择装备...", min_values=1, max_values=1)
     async def select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        from utils.player import get_player
         uid = str(interaction.user.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
         tier = get_player_tier(player["realm"])
-        ok, msg = equip_item(uid, select.values[0], tier)
+        ok, msg = await equip_item(uid, select.values[0], tier)
         if ok:
             await _refresh_main_panel(interaction, self.author, self.cog, msg)
         else:
@@ -178,7 +173,7 @@ class _UnequipSelectView(discord.ui.View):
     @discord.ui.select(placeholder="选择装备...", min_values=1, max_values=1)
     async def select(self, interaction: discord.Interaction, select: discord.ui.Select):
         uid = str(interaction.user.id)
-        ok, msg = unequip_item(uid, select.values[0])
+        ok, msg = await unequip_item(uid, select.values[0])
         if ok:
             await _refresh_main_panel(interaction, self.author, self.cog, msg)
         else:
@@ -205,7 +200,7 @@ class _DiscardSelectView(discord.ui.View):
     @discord.ui.select(placeholder="选择装备...", min_values=1, max_values=1)
     async def select(self, interaction: discord.Interaction, select: discord.ui.Select):
         uid = str(interaction.user.id)
-        ok, msg = discard_equipment(uid, select.values[0])
+        ok, msg = await discard_equipment(uid, select.values[0])
         if ok:
             await _refresh_main_panel(interaction, self.author, self.cog, msg)
         else:
@@ -217,17 +212,19 @@ class _DiscardSelectView(discord.ui.View):
 
 
 async def _go_equipment_panel(interaction: discord.Interaction, author, cog):
+    from utils.player import get_player
     uid = str(author.id)
-    player = _get_player(uid)
-    equips = get_equipment_list(uid)
+    player = await get_player(uid)
+    equips = await get_equipment_list(uid)
     embed = _build_equipment_embed(player, equips)
     await interaction.response.edit_message(embed=embed, view=EquipmentManageView(author, cog))
 
 
 async def _refresh_main_panel(interaction: discord.Interaction, author, cog, msg: str):
+    from utils.player import get_player
     uid = str(author.id)
-    player = _get_player(uid)
-    equips = get_equipment_list(uid)
+    player = await get_player(uid)
+    equips = await get_equipment_list(uid)
     embed = _build_equipment_embed(player, equips)
     embed.set_footer(text=msg)
     await interaction.response.edit_message(embed=embed, view=EquipmentManageView(author, cog))

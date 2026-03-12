@@ -11,17 +11,17 @@ class PlayerActionView(discord.ui.View):
         self.target = target
         self.in_pvp_zone = in_pvp_zone
         self.add_item(PartyInviteButton(viewer, target))
-        
+
         has_dual = self._check_dual_technique(viewer)
         if has_dual:
             dual_btn = discord.ui.Button(label="💕 邀请双修", style=discord.ButtonStyle.primary)
             dual_btn.callback = self._dual_cultivate_callback
             self.add_item(dual_btn)
-        
+
         atk_btn = discord.ui.Button(label="⚔️ 发起攻击", style=discord.ButtonStyle.danger, disabled=not in_pvp_zone)
         atk_btn.callback = self._attack_callback
         self.add_item(atk_btn)
-    
+
     def _check_dual_technique(self, player: dict) -> bool:
         import json
         techniques = json.loads(player.get("techniques") or "[]")
@@ -36,59 +36,65 @@ class PlayerActionView(discord.ui.View):
             await interaction.response.send_message("这不是你的面板。", ephemeral=True)
             return False
         return True
-    
+
     async def _dual_cultivate_callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         import random
-        from utils.db import get_conn
+        from sqlalchemy import text
+        from utils.db_async import AsyncSessionLocal
         from utils.character import years_to_seconds
-        
+
         uid = str(interaction.user.id)
         target_uid = self.target["discord_id"]
-        
-        with get_conn() as conn:
-            inviter = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
-            target = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (target_uid,)).fetchone())
-        
+
+        async with AsyncSessionLocal() as session:
+            r1 = await session.execute(text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid})
+            row1 = r1.fetchone()
+            r2 = await session.execute(text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": target_uid})
+            row2 = r2.fetchone()
+
+        inviter = dict(row1._mapping) if row1 else None
+        target = dict(row2._mapping) if row2 else None
+
         if not inviter or not target:
             return await interaction.followup.send("数据异常。", ephemeral=True)
-        
+
         if inviter["is_dead"] or target["is_dead"]:
             return await interaction.followup.send("对方已坐化。", ephemeral=True)
-        
+
         if inviter["current_city"] != target["current_city"]:
             return await interaction.followup.send("双修需在同一城市。", ephemeral=True)
-        
+
         import time
         now = time.time()
         cooldown_secs = years_to_seconds(2)
-        
+
         if inviter.get("last_dual_cultivate") and now - inviter["last_dual_cultivate"] < cooldown_secs:
             from utils.character import seconds_to_years
             remaining = seconds_to_years(cooldown_secs - (now - inviter["last_dual_cultivate"]))
             return await interaction.followup.send(f"你的双修冷却中，还需 {remaining:.1f} 游戏年。", ephemeral=True)
-        
+
         if target.get("last_dual_cultivate") and now - target["last_dual_cultivate"] < cooldown_secs:
             from utils.character import seconds_to_years
             remaining = seconds_to_years(cooldown_secs - (now - target["last_dual_cultivate"]))
             return await interaction.followup.send(f"对方双修冷却中，还需 {remaining:.1f} 游戏年。", ephemeral=True)
-        
+
         if inviter.get("cultivating_until") and now < inviter["cultivating_until"]:
             return await interaction.followup.send("你正在闭关，无法双修。", ephemeral=True)
-        
+
         if target.get("cultivating_until") and now < target["cultivating_until"]:
             return await interaction.followup.send("对方正在闭关，无法双修。", ephemeral=True)
-        
+
         if inviter["lifespan"] < 1:
             return await interaction.followup.send("你的寿元不足。", ephemeral=True)
-        
+
         if target["lifespan"] < 1:
             return await interaction.followup.send("对方寿元不足。", ephemeral=True)
-        
+
         inv_virgin = bool(inviter["is_virgin"])
         tgt_virgin = bool(target["is_virgin"])
         both_virgin = inv_virgin and tgt_virgin
-        
+
         if both_virgin:
             multiplier = random.uniform(10, 20)
             mult_desc = f"双方皆为清白之身，阴阳交融，修为暴涨（**{multiplier:.1f}倍**）"
@@ -98,14 +104,14 @@ class PlayerActionView(discord.ui.View):
         else:
             multiplier = 1.2
             mult_desc = "双修加持，修为略有提升（**1.2倍**）"
-        
+
         from utils.views.dual import DualCultivateInviteView
-        
+
         try:
             target_user = await interaction.client.fetch_user(int(target_uid))
         except:
             return await interaction.followup.send("无法找到对方用户。", ephemeral=True)
-        
+
         embed = discord.Embed(
             title="✦ 双修邀请 ✦",
             description=(
@@ -116,11 +122,11 @@ class PlayerActionView(discord.ui.View):
             ),
             color=discord.Color.pink(),
         )
-        
+
         cultivation_cog = interaction.client.cogs.get("Cultivation")
         if not cultivation_cog:
             return await interaction.followup.send("系统异常。", ephemeral=True)
-        
+
         await interaction.followup.send(
             target_user.mention,
             embed=embed,
@@ -129,25 +135,30 @@ class PlayerActionView(discord.ui.View):
 
     async def _attack_callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        from utils.db import get_conn
+        from sqlalchemy import text
+        from utils.db_async import AsyncSessionLocal
         from utils.combat import roll_combat, roll_escape
         uid = str(interaction.user.id)
         def_uid = self.target["discord_id"]
-        with get_conn() as conn:
-            atk = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
-            dfn = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (def_uid,)).fetchone())
+        async with AsyncSessionLocal() as session:
+            r1 = await session.execute(text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid})
+            row1 = r1.fetchone()
+            r2 = await session.execute(text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": def_uid})
+            row2 = r2.fetchone()
+        atk = dict(row1._mapping)
+        dfn = dict(row2._mapping)
         if atk["is_dead"] or dfn["is_dead"]:
             return await interaction.followup.send("对方已坐化。", ephemeral=True)
         if atk["current_city"] != dfn["current_city"]:
             return await interaction.followup.send("对方已离开此地。", ephemeral=True)
-        won, atk_power, def_power = roll_combat(atk, dfn)
+        won, atk_power, def_power = await roll_combat(atk, dfn)
         for item in self.children:
             item.disabled = True
         self.stop()
 
         from utils.combat import consume_combat_buffs, consume_escape_buff
-        consume_combat_buffs(uid, atk)
-        consume_combat_buffs(def_uid, dfn)
+        await consume_combat_buffs(uid, atk)
+        await consume_combat_buffs(def_uid, dfn)
 
         result_embed = discord.Embed(
             title="⚔️ 战斗结算",
@@ -158,9 +169,9 @@ class PlayerActionView(discord.ui.View):
             result_embed.description += f"**{atk['name']}** 胜！"
             await interaction.followup.send(embed=result_embed, view=VictoryActionView(interaction.user, atk, dfn), ephemeral=True)
         else:
-            escaped, escape_pct = roll_escape(dfn)
+            escaped, escape_pct = await roll_escape(dfn)
             if escaped:
-                consume_escape_buff(def_uid, dfn)
+                await consume_escape_buff(def_uid, dfn)
                 result_embed.description += f"**{atk['name']}** 败北！\n**{dfn['name']}** 趁乱逃脱（逃跑成功率 {escape_pct}%）。"
                 await interaction.followup.send(embed=result_embed, ephemeral=True)
             else:
@@ -175,11 +186,20 @@ class VictoryActionView(discord.ui.View):
         self.author = author
         self.winner = winner
         self.loser = loser
-        self._check_lifespan_restore(loser)
+        self._schedule_lifespan_restore(loser)
 
-    def _check_lifespan_restore(self, player: dict):
+    def _schedule_lifespan_restore(self, player: dict):
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._check_lifespan_restore(player))
+        except RuntimeError:
+            pass
+
+    async def _check_lifespan_restore(self, player: dict):
+        from sqlalchemy import text
+        from utils.db_async import AsyncSessionLocal
         from utils.buffs import get_buff_value, consume_once_buff
-        from utils.db import get_conn
         lifespan = player.get("lifespan", 0)
         lifespan_max = player.get("lifespan_max", 1)
         if lifespan_max <= 0:
@@ -195,12 +215,12 @@ class VictoryActionView(discord.ui.View):
         raw = player.get("active_buffs") or "{}"
         _, raw = consume_once_buff(raw, "combat_lifespan_restore")
         uid = player.get("discord_id", "")
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE players SET lifespan = MIN(lifespan_max, lifespan + ?), active_buffs = ? WHERE discord_id = ?",
-                (restore_amount, raw, uid)
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET lifespan = MIN(lifespan_max, lifespan + :amt), active_buffs = :raw WHERE discord_id = :uid"),
+                {"amt": restore_amount, "raw": raw, "uid": uid}
             )
-            conn.commit()
+            await session.commit()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user != self.author:
@@ -211,17 +231,19 @@ class VictoryActionView(discord.ui.View):
     @discord.ui.button(label="💰 打劫灵石", style=discord.ButtonStyle.danger)
     async def rob(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        from utils.db import get_conn
+        from sqlalchemy import text
+        from utils.db_async import AsyncSessionLocal
         def_uid = self.loser["discord_id"]
         atk_uid = self.winner["discord_id"]
-        with get_conn() as conn:
-            row = conn.execute("SELECT spirit_stones FROM players WHERE discord_id = ?", (def_uid,)).fetchone()
+        async with AsyncSessionLocal() as session:
+            r = await session.execute(text("SELECT spirit_stones FROM players WHERE discord_id = :uid"), {"uid": def_uid})
+            row = r.fetchone()
             if not row:
                 return await interaction.followup.send("对方数据异常。", ephemeral=True)
-            loot = max(1, int(row["spirit_stones"] * random.uniform(0.3, 0.6)))
-            conn.execute("UPDATE players SET spirit_stones = spirit_stones - ? WHERE discord_id = ?", (loot, def_uid))
-            conn.execute("UPDATE players SET spirit_stones = spirit_stones + ? WHERE discord_id = ?", (loot, atk_uid))
-            conn.commit()
+            loot = max(1, int(row._mapping["spirit_stones"] * random.uniform(0.3, 0.6)))
+            await session.execute(text("UPDATE players SET spirit_stones = spirit_stones - :amt WHERE discord_id = :uid"), {"amt": loot, "uid": def_uid})
+            await session.execute(text("UPDATE players SET spirit_stones = spirit_stones + :amt WHERE discord_id = :uid"), {"amt": loot, "uid": atk_uid})
+            await session.commit()
         for item in self.children:
             item.disabled = True
         self.stop()
@@ -230,10 +252,11 @@ class VictoryActionView(discord.ui.View):
     @discord.ui.button(label="💀 废去修为", style=discord.ButtonStyle.danger)
     async def cripple(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        from utils.db import get_conn
-        with get_conn() as conn:
-            conn.execute("UPDATE players SET cultivation = 0 WHERE discord_id = ?", (self.loser["discord_id"],))
-            conn.commit()
+        from sqlalchemy import text
+        from utils.db_async import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("UPDATE players SET cultivation = 0 WHERE discord_id = :uid"), {"uid": self.loser["discord_id"]})
+            await session.commit()
         for item in self.children:
             item.disabled = True
         self.stop()
@@ -242,10 +265,11 @@ class VictoryActionView(discord.ui.View):
     @discord.ui.button(label="☠️ 击杀", style=discord.ButtonStyle.danger)
     async def kill(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        from utils.db import get_conn
-        with get_conn() as conn:
-            conn.execute("UPDATE players SET is_dead = 1, lifespan = 0 WHERE discord_id = ?", (self.loser["discord_id"],))
-            conn.commit()
+        from sqlalchemy import text
+        from utils.db_async import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("UPDATE players SET is_dead = 1, lifespan = 0 WHERE discord_id = :uid"), {"uid": self.loser["discord_id"]})
+            await session.commit()
         for item in self.children:
             item.disabled = True
         self.stop()

@@ -65,7 +65,7 @@ async def start_cultivation(discord_id: str, years: int) -> dict:
             return {"success": False, "message": "正在采集中，无法修炼"}
         
         cultivating_until = now + years_to_seconds(years)
-        bonus = get_cultivation_bonus(discord_id, player.current_city, player.cave)
+        bonus = await get_cultivation_bonus(discord_id, player.current_city, player.cave)
         
         from utils.buffs import get_cultivation_speed_bonus
         speed_bonus = get_cultivation_speed_bonus({c.key: getattr(player, c.key) for c in player.__table__.columns})
@@ -118,7 +118,7 @@ async def stop_cultivation(discord_id: str) -> dict:
             and str(partner.dual_partner_id or "") == discord_id
         )
         
-        def _calc_stop(p, is_dual_mode: bool):
+        async def _calc_stop(p, is_dual_mode: bool):
             elapsed_years = seconds_to_years(now - (p.last_active or now))
             total_years = p.cultivating_years or 0
             actual_years = min(int(elapsed_years), int(total_years or 0))
@@ -127,7 +127,7 @@ async def stop_cultivation(discord_id: str) -> dict:
             if overflow > 0:
                 gain = int(overflow * actual_years / max(int(total_years or 1), 1))
             else:
-                bonus = get_cultivation_bonus(str(p.discord_id), p.current_city, p.cave)
+                bonus = await get_cultivation_bonus(str(p.discord_id), p.current_city, p.cave)
                 from utils.buffs import get_cultivation_speed_bonus
                 speed_bonus = get_cultivation_speed_bonus({c.key: getattr(p, c.key) for c in p.__table__.columns})
                 if speed_bonus > 0:
@@ -146,7 +146,7 @@ async def stop_cultivation(discord_id: str) -> dict:
             return actual_years, gain, new_cultivation, new_lifespan
         
         if not is_dual or not partner_active:
-            actual_years, gain, new_cultivation, new_lifespan = _calc_stop(player, is_dual_mode=False)
+            actual_years, gain, new_cultivation, new_lifespan = await _calc_stop(player, is_dual_mode=False)
             
             player.cultivation = new_cultivation
             player.lifespan = new_lifespan
@@ -171,8 +171,8 @@ async def stop_cultivation(discord_id: str) -> dict:
                 "lifespan": new_lifespan
             }
         
-        a_years, a_gain, a_cult, a_life = _calc_stop(player, is_dual_mode=True)
-        b_years, b_gain, b_cult, b_life = _calc_stop(partner, is_dual_mode=True)
+        a_years, a_gain, a_cult, a_life = await _calc_stop(player, is_dual_mode=True)
+        b_years, b_gain, b_cult, b_life = await _calc_stop(partner, is_dual_mode=True)
         
         player.cultivation = a_cult
         player.lifespan = a_life
@@ -229,7 +229,7 @@ async def claim_cultivation(discord_id: str) -> dict:
             return {"success": False, "message": "当前没有待领取的修炼成果"}
         
         years_done = player.cultivating_years or 0
-        bonus = get_cultivation_bonus(discord_id, player.current_city, player.cave)
+        bonus = await get_cultivation_bonus(discord_id, player.current_city, player.cave)
         
         from utils.buffs import get_cultivation_speed_bonus
         speed_bonus = get_cultivation_speed_bonus({c.key: getattr(player, c.key) for c in player.__table__.columns})

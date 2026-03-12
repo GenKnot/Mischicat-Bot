@@ -11,7 +11,8 @@ from utils.character import (
 from utils.realms import cultivation_needed, lifespan_max_for_realm
 from utils.config import COMMAND_PREFIX
 from utils.views import MainMenuView, ProfileView, CultivateView, ClaimCultivationView, DualCultivateInviteView, YinYangView, _build_menu_embed
-from utils.db import get_conn
+from sqlalchemy import text
+from utils.db_async import AsyncSessionLocal
 from utils.world import CITIES
 from utils.player import get_player, is_defending, settle_time, apply_updates, can_breakthrough
 
@@ -38,21 +39,6 @@ class CultivationCog(commands.Cog, name="Cultivation"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._notified: set[str] = set()
-
-    def _get_player(self, discord_id: str):
-        return get_player(discord_id)
-
-    def _is_defending(self, uid: str) -> bool:
-        return is_defending(uid)
-
-    def _settle_time(self, player):
-        return settle_time(player)
-
-    def _apply_updates(self, discord_id: str, updates: dict):
-        apply_updates(discord_id, updates)
-
-    def _can_breakthrough(self, player) -> bool:
-        return can_breakthrough(player)
 
     def _calc_rebirth_bonus(self, player: dict) -> dict:
         return calculate_rebirth_bonus(player)
@@ -108,23 +94,23 @@ class CultivationCog(commands.Cog, name="Cultivation"):
 
     async def send_profile(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.followup.send(f"尚未踏入修仙之路，请先使用 `{COMMAND_PREFIX}创建角色`。")
-        updates, _ = self._settle_time(player)
-        self._apply_updates(uid, updates)
-        player = self._get_player(uid)
+        updates, _ = await settle_time(player)
+        await apply_updates(uid, updates)
+        player = await get_player(uid)
         if player["lifespan"] <= 0 or player["is_dead"]:
-            with get_conn() as conn:
-                conn.execute("UPDATE players SET is_dead = 1 WHERE discord_id = ?", (uid,))
-                conn.commit()
+            async with AsyncSessionLocal() as session:
+                await session.execute(text("UPDATE players SET is_dead = 1 WHERE discord_id = :uid"), {"uid": uid})
+                await session.commit()
             return await interaction.followup.send(
                 f"道友 **{player['name']}** 寿元已尽，魂归天道。\n可使用 `{COMMAND_PREFIX}创建角色` 重入修仙之路。"
             )
         now = time.time()
         needed = cultivation_needed(player["realm"])
         is_cultivating = bool(player["cultivating_until"] and now < player["cultivating_until"])
-        can_bt = self._can_breakthrough(player)
+        can_bt = can_breakthrough(player)
         if is_cultivating:
             remaining = seconds_to_years(player["cultivating_until"] - now)
             status = f"闭关中（还剩 {remaining:.1f} 年）"
@@ -161,8 +147,8 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         if player.get("has_bahongchen"):
             embed.add_field(name="奇遇", value="阴阳两界 · 已触发", inline=False)
         from utils.combat import calc_power, calc_escape_rate
-        power = calc_power(player)
-        escape_pct = calc_escape_rate(player) * 100
+        power = await calc_power(player)
+        escape_pct = (await calc_escape_rate(player)) * 100
         embed.add_field(name="综合战力", value=f"{power:.1f}", inline=True)
         embed.add_field(name="逃跑成功率", value=f"{escape_pct:.1f}%", inline=True)
         alchemy_level = player.get("alchemy_level", 0)
@@ -172,13 +158,13 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             next_exp = ALCHEMY_EXP_THRESHOLDS[alchemy_level + 1] if alchemy_level < 9 and alchemy_level + 1 < len(ALCHEMY_EXP_THRESHOLDS) else None
             exp_str = f"{alchemy_exp} / {next_exp}" if next_exp else f"{alchemy_exp}（满级）"
             embed.add_field(name=f"炼丹师 {alchemy_level} 品", value=f"经验 {exp_str}", inline=False)
-        with get_conn() as conn:
-            city_rows = conn.execute(
-                "SELECT discord_id, name, realm, cultivation FROM players "
-                "WHERE current_city = ? AND is_dead = 0 AND discord_id != ?",
-                (player["current_city"], uid)
-            ).fetchall()
-        city_players = [dict(r) for r in city_rows]
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT discord_id, name, realm, cultivation FROM players WHERE current_city = :city AND is_dead = 0 AND discord_id != :uid"),
+                {"city": player["current_city"], "uid": uid}
+            )
+            city_rows = result.fetchall()
+        city_players = [dict(r._mapping) for r in city_rows]
         await interaction.followup.send(
             interaction.user.mention, embed=embed,
             view=ProfileView(interaction.user, can_bt, is_cultivating, self, player, city_players)
@@ -186,12 +172,12 @@ class CultivationCog(commands.Cog, name="Cultivation"):
 
     async def send_cultivate(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.followup.send("尚未踏入修仙之路。")
-        updates, _ = self._settle_time(player)
-        self._apply_updates(uid, updates)
-        player = self._get_player(uid)
+        updates, _ = await settle_time(player)
+        await apply_updates(uid, updates)
+        player = await get_player(uid)
         if player["lifespan"] <= 0 or player["is_dead"]:
             return await interaction.followup.send("道友寿元已尽，无法修炼。")
         now = time.time()
@@ -201,10 +187,10 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         if player["gathering_until"] and now < player["gathering_until"]:
             remaining = seconds_to_years(player["gathering_until"] - now)
             return await interaction.followup.send(f"道友正在采集中，无法修炼。还剩约 **{remaining:.1f} 年**。")
-        if self._is_defending(uid):
+        if await is_defending(uid):
             return await interaction.followup.send("守城期间无法修炼，专心守城！", ephemeral=True)
         from utils.character import SPIRIT_ROOT_SPEED
-        bonus = get_cultivation_bonus(uid, player["current_city"], player.get("cave"))
+        bonus = await get_cultivation_bonus(uid, player["current_city"], player.get("cave"))
         root_mult = SPIRIT_ROOT_SPEED.get(player["spirit_root_type"], 1.0)
         root_label = {
             "单灵根": "极快", "双灵根": "较快", "三灵根": "普通",
@@ -224,8 +210,8 @@ class CultivationCog(commands.Cog, name="Cultivation"):
 
     async def start_cultivate(self, interaction: discord.Interaction, years: int):
         uid = str(interaction.user.id)
-        
-        if self._is_defending(uid):
+
+        if await is_defending(uid):
             return await interaction.followup.send("守城期间无法修炼，专心守城！", ephemeral=True)
         
         result = await async_start_cultivation(uid, years)
@@ -262,24 +248,24 @@ class CultivationCog(commands.Cog, name="Cultivation"):
 
     async def send_breakthrough(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await interaction.followup.send("尚未踏入修仙之路。")
-        updates, _ = self._settle_time(player)
-        self._apply_updates(uid, updates)
-        player = self._get_player(uid)
+        updates, _ = await settle_time(player)
+        await apply_updates(uid, updates)
+        player = await get_player(uid)
         now = time.time()
         if player["cultivating_until"] and now < player["cultivating_until"]:
             return await interaction.followup.send("请先结束闭关再尝试突破。")
-        if not self._can_breakthrough(player):
+        if not can_breakthrough(player):
             needed = cultivation_needed(player["realm"])
             return await interaction.followup.send(f"修为尚未圆满，还差 **{needed - player['cultivation']}** 点。")
 
         if player["realm"] == "炼气期10层":
             from utils.items import calc_zhuji_breakthrough_rate, can_skip_pill
-            from utils.db import has_item
+            from utils.inventory import has_item
             from utils.views.cultivation import ZhujiBreakthroughView
-            has_pill = has_item(uid, "筑基丹")
+            has_pill = await has_item(uid, "筑基丹")
             skip = can_skip_pill(player)
             rate_no_pill = calc_zhuji_breakthrough_rate(player, use_pill=False)
             rate_with_pill = calc_zhuji_breakthrough_rate(player, use_pill=True)
@@ -299,9 +285,9 @@ class CultivationCog(commands.Cog, name="Cultivation"):
 
         if player["realm"] == "筑基期10层":
             from utils.items.breakthrough import calc_ningdan_breakthrough_rate
-            from utils.db import has_item
+            from utils.inventory import has_item
             from utils.views.cultivation import NingdanBreakthroughView
-            has_pill = has_item(uid, "凝丹丹")
+            has_pill = await has_item(uid, "凝丹丹")
             rate_no_pill = calc_ningdan_breakthrough_rate(player, use_pill=False)
             rate_with_pill = calc_ningdan_breakthrough_rate(player, use_pill=True)
             embed = discord.Embed(
@@ -319,9 +305,9 @@ class CultivationCog(commands.Cog, name="Cultivation"):
 
         if player["realm"] == "结丹期后期":
             from utils.items.breakthrough import calc_huaying_breakthrough_rate
-            from utils.db import has_item
+            from utils.inventory import has_item
             from utils.views.cultivation import HuayingBreakthroughView
-            has_pill = has_item(uid, "化婴丹")
+            has_pill = await has_item(uid, "化婴丹")
             rate_no_pill = calc_huaying_breakthrough_rate(player, use_pill=False)
             rate_with_pill = calc_huaying_breakthrough_rate(player, use_pill=True)
             embed = discord.Embed(
@@ -441,34 +427,33 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         )
 
     async def _send_menu(self, ctx, *, gameplay_only: bool):
-        """有角色时发送主菜单（玩法页或完整指令页），无角色则进入创建流程。"""
         import json
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
         if not player or player.get("is_dead"):
             char_cog = self.bot.cogs.get("Character")
             if not char_cog:
                 return await ctx.send(f"{ctx.author.mention} 角色系统暂时不可用。")
             return await char_cog.create_character(ctx)
         if player and not player["is_dead"]:
-            updates, _ = self._settle_time(player)
-            self._apply_updates(uid, updates)
-            player = self._get_player(uid)
+            updates, _ = await settle_time(player)
+            await apply_updates(uid, updates)
+            player = await get_player(uid)
         has_player = player is not None and not player["is_dead"]
-        can_bt = has_player and self._can_breakthrough(player)
+        can_bt = has_player and can_breakthrough(player)
         has_dual = has_player and any(
             (t if isinstance(t, str) else t.get("name", "")) == "双修功法"
             for t in json.loads(player["techniques"] or "[]")
         )
         city_players = []
         if has_player:
-            with get_conn() as conn:
-                rows = conn.execute(
-                    "SELECT discord_id, name, realm, cultivation FROM players "
-                    "WHERE current_city = ? AND is_dead = 0 AND discord_id != ?",
-                    (player["current_city"], uid)
-                ).fetchall()
-            city_players = [dict(r) for r in rows]
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    text("SELECT discord_id, name, realm, cultivation FROM players WHERE current_city = :city AND is_dead = 0 AND discord_id != :uid"),
+                    {"city": player["current_city"], "uid": uid}
+                )
+                rows = result.fetchall()
+            city_players = [dict(r._mapping) for r in rows]
         embed = _build_menu_embed(has_dual, gameplay_only=gameplay_only)
         await ctx.send(embed=embed, view=MainMenuView(ctx.author, has_player, can_bt, self, player, city_players))
 
@@ -482,18 +467,18 @@ class CultivationCog(commands.Cog, name="Cultivation"):
 
     async def _send_profile_ctx(self, ctx):
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `{COMMAND_PREFIX}创建角色`。")
-        updates, _ = self._settle_time(player)
-        self._apply_updates(uid, updates)
-        player = self._get_player(uid)
+        updates, _ = await settle_time(player)
+        await apply_updates(uid, updates)
+        player = await get_player(uid)
         if await self._check_dead(ctx, player):
             return
         now = time.time()
         needed = cultivation_needed(player["realm"])
         is_cultivating = bool(player["cultivating_until"] and now < player["cultivating_until"])
-        can_bt = self._can_breakthrough(player)
+        can_bt = can_breakthrough(player)
         if is_cultivating:
             remaining = seconds_to_years(player["cultivating_until"] - now)
             status = f"闭关中（还剩 {remaining:.1f} 年）"
@@ -530,8 +515,8 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         if player.get("has_bahongchen"):
             embed.add_field(name="奇遇", value="阴阳两界 · 已触发", inline=False)
         from utils.combat import calc_power, calc_escape_rate
-        power = calc_power(player)
-        escape_pct = calc_escape_rate(player) * 100
+        power = await calc_power(player)
+        escape_pct = (await calc_escape_rate(player)) * 100
         embed.add_field(name="综合战力", value=f"{power:.1f}", inline=True)
         embed.add_field(name="逃跑成功率", value=f"{escape_pct:.1f}%", inline=True)
         alchemy_level = player.get("alchemy_level", 0)
@@ -541,13 +526,13 @@ class CultivationCog(commands.Cog, name="Cultivation"):
             next_exp = ALCHEMY_EXP_THRESHOLDS[alchemy_level + 1] if alchemy_level < 9 and alchemy_level + 1 < len(ALCHEMY_EXP_THRESHOLDS) else None
             exp_str = f"{alchemy_exp} / {next_exp}" if next_exp else f"{alchemy_exp}（满级）"
             embed.add_field(name=f"炼丹师 {alchemy_level} 品", value=f"经验 {exp_str}", inline=False)
-        with get_conn() as conn:
-            city_rows = conn.execute(
-                "SELECT discord_id, name, realm, cultivation FROM players "
-                "WHERE current_city = ? AND is_dead = 0 AND discord_id != ?",
-                (player["current_city"], uid)
-            ).fetchall()
-        city_players = [dict(r) for r in city_rows]
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT discord_id, name, realm, cultivation FROM players WHERE current_city = :city AND is_dead = 0 AND discord_id != :uid"),
+                {"city": player["current_city"], "uid": uid}
+            )
+            city_rows = result.fetchall()
+        city_players = [dict(r._mapping) for r in city_rows]
         await ctx.send(
             ctx.author.mention, embed=embed,
             view=ProfileView(ctx.author, can_bt, is_cultivating, self, player, city_players)
@@ -568,12 +553,12 @@ class CultivationCog(commands.Cog, name="Cultivation"):
     @commands.hybrid_command(name="修炼", aliases=["xl"], description="消耗寿元进行闭关修炼，提升修为")
     async def cultivate(self, ctx, years: int = 1):
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `{COMMAND_PREFIX}创建角色`。")
-        updates, _ = self._settle_time(player)
-        self._apply_updates(uid, updates)
-        player = self._get_player(uid)
+        updates, _ = await settle_time(player)
+        await apply_updates(uid, updates)
+        player = await get_player(uid)
         if await self._check_dead(ctx, player):
             return
         now = time.time()
@@ -583,25 +568,25 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         if player["gathering_until"] and now < player["gathering_until"]:
             remaining = seconds_to_years(player["gathering_until"] - now)
             return await ctx.send(f"{ctx.author.mention} 道友正在采集中，无法修炼。还剩约 **{remaining:.1f} 年**。")
-        if self._is_defending(uid):
+        if await is_defending(uid):
             return await ctx.send(f"{ctx.author.mention} 守城期间无法修炼，专心守城！")
         if years < 1 or years > 100:
             return await ctx.send("修炼年数需在 1 至 100 之间。")
         if player["lifespan"] < years:
             return await ctx.send(f"{ctx.author.mention} 寿元不足，剩余寿元 **{player['lifespan']} 年**，无法修炼 {years} 年。")
         cultivating_until = now + years_to_seconds(years)
-        bonus = get_cultivation_bonus(uid, player["current_city"], player.get("cave"))
+        bonus = await get_cultivation_bonus(uid, player["current_city"], player.get("cave"))
         from utils.buffs import get_cultivation_speed_bonus
         speed_bonus = get_cultivation_speed_bonus(player)
         if speed_bonus > 0:
             bonus += speed_bonus
         gain = int(calc_cultivation_gain(years, player["comprehension"], player["spirit_root_type"]) * (1 + bonus))
-        with get_conn() as conn:
-            conn.execute("""
-                UPDATE players SET cultivating_until = ?, cultivating_years = ?, last_active = ?
-                WHERE discord_id = ?
-            """, (cultivating_until, years, now, uid))
-            conn.commit()
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET cultivating_until = :until, cultivating_years = :years, last_active = :now WHERE discord_id = :uid"),
+                {"until": cultivating_until, "years": years, "now": now, "uid": uid}
+            )
+            await session.commit()
         needed = cultivation_needed(player["realm"])
         pill_note = f"（修炼速度加成 +{int(speed_bonus * 100)}%）\n" if speed_bonus > 0 else ""
         await ctx.send(
@@ -613,7 +598,7 @@ class CultivationCog(commands.Cog, name="Cultivation"):
     @commands.hybrid_command(name="停止", aliases=["tz"], description="提前结束当前的闭关修炼")
     async def stop_cultivate(self, ctx):
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
         now = time.time()
@@ -627,25 +612,25 @@ class CultivationCog(commands.Cog, name="Cultivation"):
     @commands.hybrid_command(name="突破", aliases=["tp"], description="尝试突破当前境界，成功可提升大境界与寿元")
     async def breakthrough(self, ctx):
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路，请先使用 `{COMMAND_PREFIX}创建角色`。")
-        updates, _ = self._settle_time(player)
-        self._apply_updates(uid, updates)
-        player = self._get_player(uid)
+        updates, _ = await settle_time(player)
+        await apply_updates(uid, updates)
+        player = await get_player(uid)
         if await self._check_dead(ctx, player):
             return
         now = time.time()
         if player["cultivating_until"] and now < player["cultivating_until"]:
             return await ctx.send(f"{ctx.author.mention} 请先结束闭关再尝试突破。")
-        if not self._can_breakthrough(player):
+        if not can_breakthrough(player):
             needed = cultivation_needed(player["realm"])
             return await ctx.send(f"{ctx.author.mention} 修为尚未圆满，还差 **{needed - player['cultivation']}** 点。")
         if player["realm"] == "炼气期10层":
             from utils.items import calc_zhuji_breakthrough_rate, can_skip_pill
-            from utils.db import has_item
+            from utils.inventory import has_item
             from utils.views.cultivation import ZhujiBreakthroughView
-            has_pill = has_item(uid, "筑基丹")
+            has_pill = await has_item(uid, "筑基丹")
             skip = can_skip_pill(player)
             rate_no_pill = calc_zhuji_breakthrough_rate(player, use_pill=False)
             rate_with_pill = calc_zhuji_breakthrough_rate(player, use_pill=True)
@@ -677,8 +662,8 @@ class CultivationCog(commands.Cog, name="Cultivation"):
         if target.bot:
             return await ctx.send(f"{ctx.author.mention} 对方不是修士。")
 
-        inviter = self._get_player(uid)
-        target_player = self._get_player(str(target.id))
+        inviter = await get_player(uid)
+        target_player = await get_player(str(target.id))
         if not inviter or inviter["is_dead"]:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路或已坐化。")
         if not target_player or target_player["is_dead"]:
@@ -765,37 +750,36 @@ class CultivationCog(commands.Cog, name="Cultivation"):
     @tasks.loop(minutes=1)
     async def _cultivation_notifier(self):
         now = time.time()
-        with get_conn() as conn:
-            rows = conn.execute(
-                "SELECT discord_id, name, cultivation, realm, comprehension, spirit_root_type, "
-                "cultivating_years, current_city, cave, active_buffs, cultivation_overflow FROM players "
-                "WHERE cultivating_until IS NOT NULL AND cultivating_until <= ? AND is_dead = 0",
-                (now,)
-            ).fetchall()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT discord_id, name, cultivation, realm, comprehension, spirit_root_type, cultivating_years, current_city, cave, active_buffs, cultivation_overflow FROM players WHERE cultivating_until IS NOT NULL AND cultivating_until <= :now AND is_dead = 0"),
+                {"now": now}
+            )
+            rows = result.fetchall()
         for row in rows:
-            uid = row["discord_id"]
+            uid = row._mapping["discord_id"]
             if uid in self._notified:
                 continue
             self._notified.add(uid)
-            years_done = row["cultivating_years"] or 0
-            bonus = get_cultivation_bonus(uid, row["current_city"], row["cave"])
+            years_done = row._mapping["cultivating_years"] or 0
+            bonus = await get_cultivation_bonus(uid, row._mapping["current_city"], row._mapping["cave"])
             from utils.buffs import get_cultivation_speed_bonus
-            speed_bonus = get_cultivation_speed_bonus(dict(row))
+            speed_bonus = get_cultivation_speed_bonus(dict(row._mapping))
             if speed_bonus > 0:
                 bonus += speed_bonus
-            overflow = row["cultivation_overflow"] or 0
-            gain = overflow if overflow > 0 else int(calc_cultivation_gain(years_done, row["comprehension"], row["spirit_root_type"]) * (1 + bonus))
-            new_cultivation = row["cultivation"] + gain
-            with get_conn() as conn:
-                conn.execute(
-                    "UPDATE players SET cultivation = ?, cultivation_overflow = 0, cultivating_until = NULL, cultivating_years = NULL, dual_partner_id = NULL WHERE discord_id = ?",
-                    (new_cultivation, uid)
+            overflow = row._mapping["cultivation_overflow"] or 0
+            gain = overflow if overflow > 0 else int(calc_cultivation_gain(years_done, row._mapping["comprehension"], row._mapping["spirit_root_type"]) * (1 + bonus))
+            new_cultivation = row._mapping["cultivation"] + gain
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("UPDATE players SET cultivation = :cultivation, cultivation_overflow = 0, cultivating_until = NULL, cultivating_years = NULL, dual_partner_id = NULL WHERE discord_id = :uid"),
+                    {"cultivation": new_cultivation, "uid": uid}
                 )
-                conn.commit()
+                await session.commit()
             try:
-                player = self._get_player(uid)
+                player = await get_player(uid)
                 needed = cultivation_needed(player["realm"])
-                can_bt = self._can_breakthrough(player)
+                can_bt = can_breakthrough(player)
                 embed = discord.Embed(title="✦ 闭关结束 ✦", description=f"**{row['name']}** 出关！", color=discord.Color.gold())
                 embed.add_field(name="修为获得", value=f"+{gain}", inline=True)
                 embed.add_field(name="当前修为", value=f"{player['cultivation']} / {needed}", inline=True)
@@ -814,42 +798,49 @@ class CultivationCog(commands.Cog, name="Cultivation"):
     @tasks.loop(minutes=1)
     async def _gathering_notifier(self):
         now = time.time()
-        with get_conn() as conn:
-            rows = conn.execute(
-                "SELECT discord_id, name, gathering_type, gathering_until, current_city, realm FROM players "
-                "WHERE gathering_until IS NOT NULL AND gathering_until <= ? AND is_dead = 0",
-                (now,)
-            ).fetchall()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT discord_id, name, gathering_type, gathering_until, current_city, realm FROM players WHERE gathering_until IS NOT NULL AND gathering_until <= :now AND is_dead = 0"),
+                {"now": now}
+            )
+            rows = result.fetchall()
         for row in rows:
-            uid = row["discord_id"]
+            uid = row._mapping["discord_id"]
             notify_key = f"gather_{uid}"
             if notify_key in self._notified:
                 continue
             self._notified.add(notify_key)
             from utils.views.gathering import roll_gathering_rewards
             from utils.realms import get_realm_index as _gri
-            from utils.db import add_item
-            gather_type = row["gathering_type"] or "采矿"
-            region_name = row["current_city"]
-            realm_idx = _gri(row["realm"])
-            with get_conn() as conn:
-                p = conn.execute("SELECT gathering_until, last_active, gathering_bonus FROM players WHERE discord_id = ?", (uid,)).fetchone()
-                actual_duration = (p["gathering_until"] - p["last_active"]) if p and p["gathering_until"] else 7200
-                years_spent = max(0.25, seconds_to_years(actual_duration))
-                saved_bonus = p["gathering_bonus"] if p else 0
+            from utils.inventory import add_item
+            gather_type = row._mapping["gathering_type"] or "采矿"
+            region_name = row._mapping["current_city"]
+            realm_idx = _gri(row._mapping["realm"])
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    text("SELECT gathering_until, last_active, gathering_bonus FROM players WHERE discord_id = :uid"),
+                    {"uid": uid}
+                )
+                p = result.fetchone()
+            actual_duration = (p._mapping["gathering_until"] - p._mapping["last_active"]) if p and p._mapping["gathering_until"] else 7200
+            years_spent = max(0.25, seconds_to_years(actual_duration))
+            saved_bonus = p._mapping["gathering_bonus"] if p else 0
             rewards = roll_gathering_rewards(years_spent, realm_idx, region_name, gather_type, gather_bonus=saved_bonus or 0)
-            with get_conn() as conn:
-                conn.execute("UPDATE players SET gathering_until = NULL, gathering_type = NULL WHERE discord_id = ?", (uid,))
-                conn.commit()
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("UPDATE players SET gathering_until = NULL, gathering_type = NULL WHERE discord_id = :uid"),
+                    {"uid": uid}
+                )
+                await session.commit()
             for item_name, qty in rewards:
-                add_item(uid, item_name, qty)
+                await add_item(uid, item_name, qty)
             try:
                 from utils.views.gathering import TYPE_EMOJI
                 from utils.items import ITEMS
                 emoji = TYPE_EMOJI.get(gather_type, "⛏️")
                 embed = discord.Embed(
                     title=f"✦ {emoji} {gather_type}完成 ✦",
-                    description=f"**{row['name']}** 在 **{region_name}** 的{gather_type}已完成！",
+                    description=f"**{row._mapping['name']}** 在 **{region_name}** 的{gather_type}已完成！",
                     color=discord.Color.green(),
                 )
                 if rewards:

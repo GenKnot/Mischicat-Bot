@@ -1,7 +1,9 @@
-import uuid
-import time
 import discord
-from utils.db import get_conn
+from utils.party import (
+    get_party, get_party_members, create_party, add_to_party,
+    remove_from_party, disband_party,
+)
+from utils.player import get_player
 
 
 def party_info_embed(members: list, leader_id: str) -> discord.Embed:
@@ -16,43 +18,12 @@ def party_info_embed(members: list, leader_id: str) -> discord.Embed:
 
 
 async def leave_party(uid: str, client) -> str:
-    with get_conn() as conn:
-        row = conn.execute("SELECT party_id FROM players WHERE discord_id = ?", (uid,)).fetchone()
-        if not row or not row["party_id"]:
-            return "你不在任何队伍中。"
-        party_id = row["party_id"]
-        leader_row = conn.execute("SELECT leader_id FROM parties WHERE party_id = ?", (party_id,)).fetchone()
-        if not leader_row:
-            conn.execute("UPDATE players SET party_id = NULL WHERE discord_id = ?", (uid,))
-            conn.commit()
-            return "已退出队伍。"
-        leader_id = leader_row["leader_id"]
-        conn.execute("UPDATE players SET party_id = NULL WHERE discord_id = ?", (uid,))
-        remaining = conn.execute("SELECT discord_id FROM players WHERE party_id = ?", (party_id,)).fetchall()
-        if not remaining:
-            conn.execute("DELETE FROM parties WHERE party_id = ?", (party_id,))
-        elif uid == leader_id and remaining:
-            new_leader = remaining[0]["discord_id"]
-            conn.execute("UPDATE parties SET leader_id = ? WHERE party_id = ?", (new_leader, party_id))
-        conn.commit()
-    return "已退出队伍。"
+    return await remove_from_party(uid)
 
 
-async def disband_party(uid: str, client) -> str:
-    with get_conn() as conn:
-        row = conn.execute("SELECT party_id FROM players WHERE discord_id = ?", (uid,)).fetchone()
-        if not row or not row["party_id"]:
-            return "你不在任何队伍中。"
-        party_id = row["party_id"]
-        leader_row = conn.execute("SELECT leader_id FROM parties WHERE party_id = ?", (party_id,)).fetchone()
-        if not leader_row or leader_row["leader_id"] != uid:
-            return "只有队长才能解散队伍。"
-        members = [r["discord_id"] for r in conn.execute(
-            "SELECT discord_id FROM players WHERE party_id = ?", (party_id,)).fetchall()]
-        conn.execute("UPDATE players SET party_id = NULL WHERE party_id = ?", (party_id,))
-        conn.execute("DELETE FROM parties WHERE party_id = ?", (party_id,))
-        conn.commit()
-    for mid in members:
+async def disband_party_func(uid: str, client) -> str:
+    msg, member_ids = await disband_party(uid)
+    for mid in member_ids:
         if mid == uid:
             continue
         try:
@@ -60,7 +31,20 @@ async def disband_party(uid: str, client) -> str:
             await user.send("队长已解散队伍，你已退出。")
         except Exception:
             pass
-    return "队伍已解散，所有成员已退出。"
+    return msg
+
+
+class PartyView(discord.ui.View):
+    def __init__(self, author, cog=None):
+        super().__init__(timeout=120)
+        self.author = author
+        self.cog = cog
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message("这不是你的面板。", ephemeral=True)
+            return False
+        return True
 
 
 class PartyInviteButton(discord.ui.Button):
@@ -72,15 +56,13 @@ class PartyInviteButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
         target_uid = self.target["discord_id"]
-        with get_conn() as conn:
-            inv = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
-            tgt = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (target_uid,)).fetchone())
+        inv = await get_player(uid)
+        tgt = await get_player(target_uid)
         if inv["current_city"] != tgt["current_city"]:
             return await interaction.response.send_message("对方已离开此地。", ephemeral=True)
         if inv.get("party_id"):
-            with get_conn() as conn:
-                count = conn.execute("SELECT COUNT(*) FROM players WHERE party_id = ?", (inv["party_id"],)).fetchone()[0]
-            if count >= 4:
+            members = await get_party_members(inv["party_id"])
+            if len(members) >= 4:
                 return await interaction.response.send_message("队伍已满（最多4人）。", ephemeral=True)
         if tgt.get("party_id"):
             return await interaction.response.send_message(f"**{tgt['name']}** 已在其他队伍中。", ephemeral=True)
@@ -108,32 +90,23 @@ class PartyInviteResponseView(discord.ui.View):
     async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
         inv_uid = self.inviter["discord_id"]
-        with get_conn() as conn:
-            inv = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (inv_uid,)).fetchone())
-            tgt = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
+        inv = await get_player(inv_uid)
+        tgt = await get_player(uid)
         if inv["current_city"] != tgt["current_city"]:
             return await interaction.response.send_message("邀请者已离开原城市，组队失败。")
         if inv.get("party_id"):
             party_id = inv["party_id"]
-            with get_conn() as conn:
-                count = conn.execute("SELECT COUNT(*) FROM players WHERE party_id = ?", (party_id,)).fetchone()[0]
-            if count >= 4:
+            members = await get_party_members(party_id)
+            if len(members) >= 4:
                 return await interaction.response.send_message("队伍已满，无法加入。")
+            await add_to_party(party_id, uid)
         else:
-            party_id = str(uuid.uuid4())[:8]
-            with get_conn() as conn:
-                conn.execute("INSERT INTO parties VALUES (?, ?, ?, ?)",
-                             (party_id, inv_uid, inv["current_city"], time.time()))
-                conn.execute("UPDATE players SET party_id = ? WHERE discord_id = ?", (party_id, inv_uid))
-                conn.commit()
-        with get_conn() as conn:
-            conn.execute("UPDATE players SET party_id = ? WHERE discord_id = ?", (party_id, uid))
-            conn.commit()
-            members = [dict(r) for r in conn.execute(
-                "SELECT * FROM players WHERE party_id = ?", (party_id,)).fetchall()]
-            leader_row = dict(conn.execute("SELECT leader_id FROM parties WHERE party_id = ?", (party_id,)).fetchone())
+            party_id = await create_party(inv_uid, inv["current_city"])
+            await add_to_party(party_id, uid)
+        party = await get_party(party_id)
+        members = await get_party_members(party_id)
         self.stop()
-        embed = party_info_embed(members, leader_row["leader_id"])
+        embed = party_info_embed(members, party["leader_id"])
         embed.title = "✦ 组队成功 ✦"
         await interaction.response.send_message(embed=embed)
         try:

@@ -149,25 +149,25 @@ async def do_breakthrough_chain(discord_id: str) -> dict:
 
 async def handle_zhuji_breakthrough(discord_id: str, use_pill: bool) -> dict:
     from utils.items import calc_zhuji_breakthrough_rate
-    from utils.db import has_item, remove_item
-    
+    from utils.inventory import has_item, remove_item
+
     async with AsyncSessionLocal() as session:
         player = await session.get(Player, discord_id)
         if not player:
             return {"success": False, "message": "角色不存在"}
-        
+
         player_dict = {c.key: getattr(player, c.key) for c in player.__table__.columns}
-    
-    if use_pill and not has_item(discord_id, "筑基丹"):
+
+    if use_pill and not await has_item(discord_id, "筑基丹"):
         return {"success": False, "message": "背包中无筑基丹"}
-    
+
     rate = calc_zhuji_breakthrough_rate(player_dict, use_pill=use_pill)
-    
+
     import random
     success = random.random() * 100 < rate
-    
+
     if use_pill:
-        remove_item(discord_id, "筑基丹", 1)
+        await remove_item(discord_id, "筑基丹", 1)
     
     if success:
         needed = cultivation_needed(player_dict["realm"])
@@ -234,25 +234,25 @@ async def handle_zhuji_breakthrough(discord_id: str, use_pill: bool) -> dict:
 
 async def handle_ningdan_breakthrough(discord_id: str, use_pill: bool) -> dict:
     from utils.items.breakthrough import calc_ningdan_breakthrough_rate
-    from utils.db import has_item, remove_item
-    
+    from utils.inventory import has_item, remove_item
+
     async with AsyncSessionLocal() as session:
         player = await session.get(Player, discord_id)
         if not player:
             return {"success": False, "message": "角色不存在"}
-        
+
         player_dict = {c.key: getattr(player, c.key) for c in player.__table__.columns}
-    
-    if use_pill and not has_item(discord_id, "凝丹丹"):
+
+    if use_pill and not await has_item(discord_id, "凝丹丹"):
         return {"success": False, "message": "背包中无凝丹丹"}
-    
+
     rate = calc_ningdan_breakthrough_rate(player_dict, use_pill=use_pill)
-    
+
     import random
     success = random.random() * 100 < rate
-    
+
     if use_pill:
-        remove_item(discord_id, "凝丹丹", 1)
+        await remove_item(discord_id, "凝丹丹", 1)
     if success:
         needed = cultivation_needed(player_dict["realm"])
         overflow = max(0, player_dict["cultivation"] - needed)
@@ -318,25 +318,25 @@ async def handle_ningdan_breakthrough(discord_id: str, use_pill: bool) -> dict:
 
 async def handle_huaying_breakthrough(discord_id: str, use_pill: bool) -> dict:
     from utils.items.breakthrough import calc_huaying_breakthrough_rate
-    from utils.db import has_item, remove_item
-    
+    from utils.inventory import has_item, remove_item
+
     async with AsyncSessionLocal() as session:
         player = await session.get(Player, discord_id)
         if not player:
             return {"success": False, "message": "角色不存在"}
-        
+
         player_dict = {c.key: getattr(player, c.key) for c in player.__table__.columns}
-    
-    if use_pill and not has_item(discord_id, "化婴丹"):
+
+    if use_pill and not await has_item(discord_id, "化婴丹"):
         return {"success": False, "message": "背包中无化婴丹"}
-    
+
     rate = calc_huaying_breakthrough_rate(player_dict, use_pill=use_pill)
-    
+
     import random
     success = random.random() * 100 < rate
-    
+
     if use_pill:
-        remove_item(discord_id, "化婴丹", 1)
+        await remove_item(discord_id, "化婴丹", 1)
     
     if success:
         needed = cultivation_needed(player_dict["realm"])

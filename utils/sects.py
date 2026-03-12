@@ -123,6 +123,8 @@ def next_stage(stage: str) -> str | None:
 def calc_technique_stat_bonus(techniques_json: list) -> dict:
     total = {}
     for t in techniques_json:
+        if isinstance(t, str):
+            t = {"name": t, "stage": "入门", "equipped": True}
         if not t.get("equipped"):
             continue
         name = t.get("name", "")

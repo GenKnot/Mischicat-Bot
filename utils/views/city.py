@@ -1,8 +1,10 @@
 import discord
+from sqlalchemy import text
 from utils.world import get_city, get_region
+from utils.db_async import AsyncSessionLocal
 
 
-def _city_menu_embed(player: dict) -> discord.Embed:
+async def _city_menu_embed(player: dict) -> discord.Embed:
     city_name = player.get("current_city", "未知")
     city = get_city(city_name)
     region = get_region(city_name)
@@ -25,15 +27,16 @@ def _city_menu_embed(player: dict) -> discord.Embed:
     if region_tag:
         embed.add_field(name="位置", value=region_tag, inline=True)
 
-    with_conn_lines = []
-    from utils.db import get_conn
-    with get_conn() as conn:
-        others = conn.execute(
-            "SELECT name, realm FROM players WHERE current_city = ? AND is_dead = 0 AND discord_id != ?",
-            (city_name, player["discord_id"])
-        ).fetchall()
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text(
+                "SELECT name, realm FROM players WHERE current_city = :city AND is_dead = 0 AND discord_id != :uid"
+            ),
+            {"city": city_name, "uid": player["discord_id"]},
+        )
+        others = result.fetchall()
     if others:
-        with_conn_lines = [f"· **{r['name']}**　{r['realm']}" for r in others[:5]]
+        with_conn_lines = [f"· **{r.name}**　{r.realm}" for r in others[:5]]
         if len(others) > 5:
             with_conn_lines.append(f"…共 {len(others)} 名修士在此")
         embed.add_field(name="在场修士", value="\n".join(with_conn_lines), inline=False)
@@ -85,10 +88,12 @@ class CityMenuButton(discord.ui.Button):
 
         elif self.action == "jobs":
             from utils.views.jobs import JobsView, _jobs_overview_embed
-            from utils.db import get_conn
             uid = str(interaction.user.id)
-            with get_conn() as conn:
-                player = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid}
+                )
+                player = dict(result.fetchone()._mapping)
             await interaction.response.edit_message(
                 embed=_jobs_overview_embed(player),
                 view=JobsView(interaction.user, player, cog),
@@ -104,11 +109,13 @@ class CityMenuButton(discord.ui.Button):
 
         elif self.action == "checkin":
             from utils.views.checkin import CheckinView, _checkin_result_embed
-            from utils.db import get_conn
             import time
             uid = str(interaction.user.id)
-            with get_conn() as conn:
-                player = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid}
+                )
+                player = dict(result.fetchone()._mapping)
             today = time.strftime("%Y-%m-%d", time.gmtime())
             last = player.get("checkin_last_date") or ""
             if last == today:
@@ -126,10 +133,12 @@ class CityMenuButton(discord.ui.Button):
 
         elif self.action == "gamble":
             from utils.views.gamble import GambleView, _gamble_overview_embed
-            from utils.db import get_conn
             uid = str(interaction.user.id)
-            with get_conn() as conn:
-                player = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid}
+                )
+                player = dict(result.fetchone()._mapping)
             await interaction.response.edit_message(
                 embed=_gamble_overview_embed(player),
                 view=GambleView(interaction.user, player, cog),

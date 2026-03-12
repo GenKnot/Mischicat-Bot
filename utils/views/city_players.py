@@ -1,5 +1,6 @@
-import random
 import discord
+from sqlalchemy import text
+from utils.db_async import AsyncSessionLocal
 from utils.realms import get_realm_index
 from utils.world import SPECIAL_REGIONS
 
@@ -63,15 +64,23 @@ class CityPlayerButton(discord.ui.Button):
         self.viewer_realm_idx = viewer_realm_idx
 
     async def callback(self, interaction: discord.Interaction):
-        from utils.db import get_conn
         from utils.views.combat import PlayerActionView
         uid = str(interaction.user.id)
-        with get_conn() as conn:
-            viewer = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?", (uid,)).fetchone())
-            target = dict(conn.execute("SELECT * FROM players WHERE discord_id = ?",
-                                       (self.target_player["discord_id"],)).fetchone())
-        if not viewer or not target:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text("SELECT * FROM players WHERE discord_id = :uid"),
+                {"uid": uid},
+            )
+            viewer_row = result.fetchone()
+            result2 = await session.execute(
+                text("SELECT * FROM players WHERE discord_id = :uid"),
+                {"uid": self.target_player["discord_id"]},
+            )
+            target_row = result2.fetchone()
+        if not viewer_row or not target_row:
             return await interaction.response.send_message("数据异常。", ephemeral=True)
+        viewer = dict(viewer_row._mapping)
+        target = dict(target_row._mapping)
 
         viewer_idx = get_realm_index(viewer["realm"])
         target_idx = get_realm_index(target["realm"])

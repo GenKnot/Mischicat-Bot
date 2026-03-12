@@ -193,22 +193,26 @@ class YinYangFinaleSubButton(discord.ui.Button):
 
 async def _do_yinyang_rebirth(interaction, player, cog, uid, final_flavor):
     import time
-    from utils.db import get_conn
+    from sqlalchemy import text
+    from utils.db_async import AsyncSessionLocal
     from utils.realms import lifespan_max_for_realm
     now = time.time()
     new_lifespan = lifespan_max_for_realm(player["realm"])
-    with get_conn() as conn:
-        conn.execute("""
-            UPDATE players SET
-                lifespan = ?, cultivation = 0,
-                cultivating_until = NULL, cultivating_years = NULL,
-                is_dead = 0, is_virgin = 1,
-                rebirth_count = rebirth_count + 1,
-                has_bahongchen = 1, escape_rate = 50,
-                last_active = ?
-            WHERE discord_id = ?
-        """, (new_lifespan, now, uid))
-        conn.commit()
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            text("""
+                UPDATE players SET
+                    lifespan = :ls, cultivation = 0,
+                    cultivating_until = NULL, cultivating_years = NULL,
+                    is_dead = 0, is_virgin = 1,
+                    rebirth_count = rebirth_count + 1,
+                    has_bahongchen = 1, escape_rate = 50,
+                    last_active = :now
+                WHERE discord_id = :uid
+            """),
+            {"ls": new_lifespan, "now": now, "uid": uid},
+        )
+        await session.commit()
     embed = discord.Embed(
         title="✦ 大梦初醒 ✦",
         description=(

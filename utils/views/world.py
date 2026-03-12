@@ -1,4 +1,7 @@
 import discord
+from sqlalchemy import text
+from utils.db_async import AsyncSessionLocal
+from utils.player import get_player, apply_updates, settle_time
 from utils.world import SPECIAL_REGIONS, cities_by_region
 from utils.sects import SECTS
 
@@ -23,30 +26,31 @@ async def _send_main_menu(interaction: discord.Interaction, cog):
     import json
     from utils.views.menu import MainMenuView, _build_menu_embed
     uid = str(interaction.user.id)
-    player = cog._get_player(uid)
+    player = await get_player(uid)
     if player and not player["is_dead"]:
-        updates, _ = cog._settle_time(player)
-        cog._apply_updates(uid, updates)
-        player = cog._get_player(uid)
+        updates, _ = await settle_time(player)
+        await apply_updates(uid, updates)
+        player = await get_player(uid)
     has_player = player is not None and not player["is_dead"]
-    can_bt = has_player and cog._can_breakthrough(player)
+    from utils.player import can_breakthrough as _can_bt
+    can_bt = has_player and _can_bt(player)
     has_dual = has_player and any(
         (t if isinstance(t, str) else t.get("name", "")) == "双修功法"
         for t in json.loads(player["techniques"] or "[]")
     )
     city_players = []
     if has_player:
-        from utils.db import get_conn
-        with get_conn() as conn:
-            rows = conn.execute(
-                "SELECT discord_id, name, realm, cultivation FROM players "
-                "WHERE current_city = ? AND is_dead = 0 AND discord_id != ?",
-                (player["current_city"], uid)
-            ).fetchall()
-        city_players = [dict(r) for r in rows]
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                text(
+                    "SELECT discord_id, name, realm, cultivation FROM players "
+                    "WHERE current_city = :city AND is_dead = 0 AND discord_id != :uid"
+                ),
+                {"city": player["current_city"], "uid": uid},
+            )
+            city_players = [dict(r._mapping) for r in result.fetchall()]
     embed = _build_menu_embed(has_dual)
     view = MainMenuView(interaction.user, has_player, can_bt, cog, player, city_players)
-    # Prefer editing the current message to avoid spam.
     if interaction.response.is_done():
         await interaction.message.edit(embed=embed, view=view)
     else:
@@ -94,7 +98,7 @@ class WorldMenuView(discord.ui.View):
     @discord.ui.button(label="排行榜", style=discord.ButtonStyle.primary, row=1)
     async def leaderboard_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         from utils.views.leaderboard import LeaderboardView, _build_realm_embed
-        embed = _build_realm_embed()
+        embed = await _build_realm_embed()
         embed.set_footer(text="仅显示存活修士 · 前十名")
         await interaction.response.edit_message(embed=embed, view=LeaderboardView(interaction.user, self.cog))
 
@@ -105,6 +109,9 @@ class WorldMenuView(discord.ui.View):
             return
         await interaction.response.defer()
         await _send_main_menu(interaction, self.cog)
+
+
+WorldView = WorldMenuView
 
 
 class _BackToWorldView(discord.ui.View):

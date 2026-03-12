@@ -4,7 +4,10 @@ import discord
 from discord.ext import commands
 
 from utils.config import COMMAND_PREFIX
-from utils.db import get_conn, has_residence, get_residences
+from utils.db_async import AsyncSessionLocal
+from sqlalchemy import text
+from utils.player import get_player
+from utils.residence import has_residence, get_residences, add_residence
 from utils.world import get_city, SPECIAL_REGIONS
 from utils.character import (
     RESIDENCE_PRICE_NORMAL, RESIDENCE_PRICE_CENTRAL, CAVE_PRICE,
@@ -12,13 +15,6 @@ from utils.character import (
     RESIDENCE_BONUS, CAVE_BONUS,
     RESIDENCE_EXPLORE_BONUS, CAVE_EXPLORE_BONUS,
 )
-
-
-def _get_player(discord_id: str):
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM players WHERE discord_id = ?", (discord_id,)
-        ).fetchone()
 
 
 def _residence_price(city_name: str) -> int:
@@ -35,7 +31,7 @@ class PropertyCog(commands.Cog, name="Property"):
     @commands.hybrid_command(name="买房", aliases=["mf"], description="在当前城市购买一处居所")
     async def buy_residence(self, ctx):
         uid = str(ctx.author.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
 
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
@@ -49,7 +45,7 @@ class PropertyCog(commands.Cog, name="Property"):
             )
 
         city = player["current_city"]
-        if has_residence(uid, city):
+        if await has_residence(uid, city):
             return await ctx.send(f"{ctx.author.mention} 道友在 **{city}** 已有居所。")
 
         price = _residence_price(city)
@@ -59,16 +55,13 @@ class PropertyCog(commands.Cog, name="Property"):
                 f"（当前：{player['spirit_stones']}）"
             )
 
-        with get_conn() as conn:
-            conn.execute(
-                "INSERT INTO residences (discord_id, city, purchased_at) VALUES (?, ?, ?)",
-                (uid, city, time.time())
+        await add_residence(uid, city)
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET spirit_stones = spirit_stones - :price WHERE discord_id = :uid"),
+                {"price": price, "uid": uid}
             )
-            conn.execute(
-                "UPDATE players SET spirit_stones = spirit_stones - ? WHERE discord_id = ?",
-                (price, uid)
-            )
-            conn.commit()
+            await session.commit()
 
         embed = discord.Embed(
             title=f"✦ 喜迁新居 · {city} ✦",
@@ -86,7 +79,7 @@ class PropertyCog(commands.Cog, name="Property"):
     @commands.hybrid_command(name="开辟洞府", aliases=["kpdf"], description="在秘地开辟洞府，获得全局修炼与探险加成")
     async def open_cave(self, ctx, *, region_name: str = None):
         uid = str(ctx.author.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
 
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
@@ -120,12 +113,12 @@ class PropertyCog(commands.Cog, name="Property"):
                 f"（当前：{player['spirit_stones']}）"
             )
 
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE players SET cave = ?, spirit_stones = spirit_stones - ? WHERE discord_id = ?",
-                (region_name, CAVE_PRICE, uid)
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET cave = :cave, spirit_stones = spirit_stones - :price WHERE discord_id = :uid"),
+                {"cave": region_name, "price": CAVE_PRICE, "uid": uid}
             )
-            conn.commit()
+            await session.commit()
 
         embed = discord.Embed(
             title=f"✦ 洞府初成 · {region_name} ✦",
@@ -143,12 +136,12 @@ class PropertyCog(commands.Cog, name="Property"):
     @commands.hybrid_command(name="我的居所", aliases=["wdjs"], description="查看自己在各城市的居所与洞府加成")
     async def my_properties(self, ctx):
         uid = str(ctx.author.id)
-        player = _get_player(uid)
+        player = await get_player(uid)
 
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
 
-        residences = get_residences(uid)
+        residences = await get_residences(uid)
         cave = player.get("cave")
 
         if not residences and not cave:

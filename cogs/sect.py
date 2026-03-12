@@ -4,7 +4,9 @@ import time
 import discord
 from discord.ext import commands
 
-from utils.db import get_conn
+from utils.db_async import AsyncSessionLocal
+from sqlalchemy import text
+from utils.player import get_player
 from utils.sects import SECTS, TECHNIQUES, check_requirements, get_technique_cost, next_stage, calc_technique_stat_bonus, TECHNIQUE_STAGES
 from utils.character import years_to_seconds, seconds_to_years
 
@@ -20,23 +22,18 @@ def _parse_techniques(raw) -> list:
     return result
 
 
-def _save_techniques(uid: str, techniques: list):
-    with get_conn() as conn:
-        conn.execute("UPDATE players SET techniques = ? WHERE discord_id = ?",
-                     (json.dumps(techniques, ensure_ascii=False), uid))
-        conn.commit()
+async def _save_techniques(uid: str, techniques: list):
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            text("UPDATE players SET techniques = :techniques WHERE discord_id = :uid"),
+            {"techniques": json.dumps(techniques, ensure_ascii=False), "uid": uid}
+        )
+        await session.commit()
 
 
 class SectCog(commands.Cog, name="Sect"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-
-    def _get_player(self, discord_id: str):
-        with get_conn() as conn:
-            row = conn.execute(
-                "SELECT * FROM players WHERE discord_id = ?", (discord_id,)
-            ).fetchone()
-            return dict(row) if row else None
 
     @commands.hybrid_command(name="宗门列表", aliases=["zmlb"], description="查看当前可见的正道与邪道宗门")
     async def sect_list(self, ctx):
@@ -98,7 +95,7 @@ class SectCog(commands.Cog, name="Sect"):
     @commands.hybrid_command(name="加入宗门", aliases=["jrzm"], description="尝试加入指定宗门")
     async def join_sect(self, ctx, *, name: str):
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
 
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
@@ -128,12 +125,12 @@ class SectCog(commands.Cog, name="Sect"):
                     "equipped": len([x for x in techniques if x.get("equipped")]) < 5,
                 })
 
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE players SET sect = ?, sect_rank = ?, techniques = ? WHERE discord_id = ?",
-                (name, "外门弟子", json.dumps(techniques, ensure_ascii=False), uid)
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET sect = :sect, sect_rank = :rank, techniques = :techniques WHERE discord_id = :uid"),
+                {"sect": name, "rank": "外门弟子", "techniques": json.dumps(techniques, ensure_ascii=False), "uid": uid}
             )
-            conn.commit()
+            await session.commit()
 
         tech_str = "、".join(f"**{t}**" for t in new_techs) if new_techs else "（已全部习得）"
         await ctx.send(
@@ -144,7 +141,7 @@ class SectCog(commands.Cog, name="Sect"):
     @commands.hybrid_command(name="退出宗门", aliases=["qtzm"], description="离开当前所在宗门")
     async def leave_sect(self, ctx):
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
 
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
@@ -152,18 +149,19 @@ class SectCog(commands.Cog, name="Sect"):
             return await ctx.send(f"{ctx.author.mention} 道友并未加入任何宗门。")
 
         sect_name = player["sect"]
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE players SET sect = NULL, sect_rank = NULL WHERE discord_id = ?", (uid,)
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET sect = NULL, sect_rank = NULL WHERE discord_id = :uid"),
+                {"uid": uid}
             )
-            conn.commit()
+            await session.commit()
 
         await ctx.send(f"{ctx.author.mention} 道友已离开 **{sect_name}**，功法仍在，但宗门资源不再可用。")
 
     @commands.hybrid_command(name="门派功法", aliases=["mpgf"], description="从宗门处查看或领取门派传承功法")
     async def sect_techniques(self, ctx):
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
 
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
@@ -188,7 +186,7 @@ class SectCog(commands.Cog, name="Sect"):
                 })
 
         if new_techs:
-            _save_techniques(uid, techniques)
+            await _save_techniques(uid, techniques)
             tech_str = "、".join(f"**{t}**" for t in new_techs)
             await ctx.send(f"{ctx.author.mention} 从 **{player['sect']}** 领悟了新功法：{tech_str}")
         else:
@@ -207,7 +205,7 @@ class SectCog(commands.Cog, name="Sect"):
     @commands.hybrid_command(name="我的功法", aliases=["wdgf"], description="查看并管理自己已习得的功法")
     async def my_techniques(self, ctx):
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
 
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
@@ -225,7 +223,7 @@ class SectCog(commands.Cog, name="Sect"):
     @commands.hybrid_command(name="装备功法", aliases=["zbgf"], description="装备或卸下一门已习得的功法")
     async def equip_technique(self, ctx, *, name: str):
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
 
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
@@ -252,7 +250,7 @@ class SectCog(commands.Cog, name="Sect"):
                         f"寿元需先消耗至 **{max_after_unequip}年** 以下方可卸下。"
                     )
             target["equipped"] = False
-            _save_techniques(uid, techniques)
+            await _save_techniques(uid, techniques)
             return await ctx.send(f"{ctx.author.mention} 已卸下功法「**{name}**」。")
 
         equipped_count = sum(1 for t in techniques if t.get("equipped"))
@@ -260,13 +258,13 @@ class SectCog(commands.Cog, name="Sect"):
             return await ctx.send(f"{ctx.author.mention} 已装备5本功法，请先卸下一本再装备新的。")
 
         target["equipped"] = True
-        _save_techniques(uid, techniques)
+        await _save_techniques(uid, techniques)
         await ctx.send(f"{ctx.author.mention} 已装备功法「**{name}**」。")
 
     @commands.hybrid_command(name="修炼功法", aliases=["xlgf"], description="消耗时间提升指定功法的境界")
     async def train_technique(self, ctx, *, name: str):
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
 
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")
@@ -306,14 +304,24 @@ class SectCog(commands.Cog, name="Sect"):
         new_stones = player["spirit_stones"] - stones_cost
         new_lifespan = player["lifespan"] - years_cost
 
-        with get_conn() as conn:
-            conn.execute(
-                "UPDATE players SET techniques = ?, spirit_stones = ?, lifespan = ?, "
-                "cultivating_until = ?, cultivating_years = ?, last_active = ? WHERE discord_id = ?",
-                (json.dumps(techniques, ensure_ascii=False), new_stones, new_lifespan,
-                 cultivating_until, years_cost, now, uid)
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text(
+                    "UPDATE players SET techniques = :techniques, spirit_stones = :stones, lifespan = :lifespan, "
+                    "cultivating_until = :cult_until, cultivating_years = :cult_years, last_active = :last_active "
+                    "WHERE discord_id = :uid"
+                ),
+                {
+                    "techniques": json.dumps(techniques, ensure_ascii=False),
+                    "stones": new_stones,
+                    "lifespan": new_lifespan,
+                    "cult_until": cultivating_until,
+                    "cult_years": years_cost,
+                    "last_active": now,
+                    "uid": uid,
+                }
             )
-            conn.commit()
+            await session.commit()
 
         info = TECHNIQUES.get(name, {})
         grade = info.get("grade", "?")
@@ -335,7 +343,7 @@ class SectCog(commands.Cog, name="Sect"):
     @commands.hybrid_command(name="功法属性", aliases=["gfsx"], description="查看功法带来的属性加成与修炼进度")
     async def technique_stats(self, ctx):
         uid = str(ctx.author.id)
-        player = self._get_player(uid)
+        player = await get_player(uid)
 
         if not player:
             return await ctx.send(f"{ctx.author.mention} 尚未踏入修仙之路。")

@@ -7,7 +7,7 @@ import discord
 from typing import Optional, Dict
 
 from utils.character import QUESTIONS, calc_stats, roll_spirit_root, REALM_LIFESPAN
-from utils.db import get_conn
+from utils.db_async import AsyncSessionLocal, Player
 from utils.player import get_player
 from utils.world import CITIES
 
@@ -226,7 +226,8 @@ class CharacterCreateView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def choose_gender(self, interaction: discord.Interaction, gender: str):
-        if get_player(self.uid) and not get_player(self.uid).get("is_dead"):
+        existing_check = await get_player(self.uid)
+        if existing_check and not existing_check.get("is_dead"):
             await interaction.response.edit_message(content="你已创建角色，无需重复创建。", embed=None, view=None)
             self.char_cog._creating.discard(self.uid)
             return
@@ -265,80 +266,67 @@ class CharacterCreateView(discord.ui.View):
         starting_city = random.choice(CITIES)["name"]
 
         rebirth_bonus = {}
-        with get_conn() as conn:
-            old = get_player(self.uid)
+        old = await get_player(self.uid)
+        async with AsyncSessionLocal() as session:
             if old and old.get("is_dead"):
                 rebirth_bonus = self.char_cog._calc_rebirth_bonus(old) if (
                     old.get("sect") == "仙葬谷" or old.get("has_bahongchen")
                 ) else {}
-                conn.execute(
-                    """
-                    UPDATE players SET
-                        name=?, gender=?, spirit_root=?, spirit_root_type=?,
-                        comprehension=?, physique=?, fortune=?, bone=?, soul=?,
-                        lifespan=?, lifespan_max=?, spirit_stones=?,
-                        cultivation=0, realm='炼气期1层',
-                        cultivating_until=NULL, cultivating_years=NULL,
-                        is_dead=0, is_virgin=1, rebirth_count=rebirth_count,
-                        sect=NULL, sect_rank=NULL, techniques='[]',
-                        dual_partner_id=NULL,
-                        cultivation_overflow=0, current_city=?,
-                        explore_count=0, explore_reset_year=0,
-                        reputation=0, cave=NULL,
-                        active_quest=NULL, quest_due=NULL,
-                        gathering_until=NULL, gathering_type=NULL,
-                        created_at=?, last_active=?
-                    WHERE discord_id=?
-                    """,
-                    (
-                        name,
-                        self.gender,
-                        spirit_root,
-                        root_type,
-                        stats["comprehension"] + rebirth_bonus.get("comprehension", 0),
-                        stats["physique"] + rebirth_bonus.get("physique", 0),
-                        stats["fortune"] + rebirth_bonus.get("fortune", 0),
-                        stats["bone"] + rebirth_bonus.get("bone", 0),
-                        stats["soul"] + rebirth_bonus.get("soul", 0),
-                        lifespan,
-                        lifespan,
-                        stats["spirit_stones"],
-                        starting_city,
-                        now,
-                        now,
-                        self.uid,
-                    ),
-                )
+                p = await session.get(Player, self.uid)
+                p.name = name
+                p.gender = self.gender
+                p.spirit_root = spirit_root
+                p.spirit_root_type = root_type
+                p.comprehension = stats["comprehension"] + rebirth_bonus.get("comprehension", 0)
+                p.physique = stats["physique"] + rebirth_bonus.get("physique", 0)
+                p.fortune = stats["fortune"] + rebirth_bonus.get("fortune", 0)
+                p.bone = stats["bone"] + rebirth_bonus.get("bone", 0)
+                p.soul = stats["soul"] + rebirth_bonus.get("soul", 0)
+                p.lifespan = lifespan
+                p.lifespan_max = lifespan
+                p.spirit_stones = stats["spirit_stones"]
+                p.cultivation = 0
+                p.realm = "炼气期1层"
+                p.cultivating_until = None
+                p.cultivating_years = None
+                p.is_dead = False
+                p.is_virgin = True
+                p.sect = None
+                p.sect_rank = None
+                p.techniques = "[]"
+                p.dual_partner_id = None
+                p.cultivation_overflow = 0
+                p.current_city = starting_city
+                p.explore_count = 0
+                p.explore_reset_year = 0
+                p.reputation = 0
+                p.cave = None
+                p.active_quest = None
+                p.quest_due = None
+                p.gathering_until = None
+                p.gathering_type = None
+                p.created_at = now
+                p.last_active = now
             else:
-                conn.execute(
-                    """
-                    INSERT INTO players (
-                        discord_id, name, gender, spirit_root, spirit_root_type,
-                        comprehension, physique, fortune, bone, soul,
-                        lifespan, lifespan_max, spirit_stones,
-                        created_at, last_active, current_city
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        self.uid,
-                        name,
-                        self.gender,
-                        spirit_root,
-                        root_type,
-                        stats["comprehension"],
-                        stats["physique"],
-                        stats["fortune"],
-                        stats["bone"],
-                        stats["soul"],
-                        lifespan,
-                        lifespan,
-                        stats["spirit_stones"],
-                        now,
-                        now,
-                        starting_city,
-                    ),
-                )
-            conn.commit()
+                session.add(Player(
+                    discord_id=self.uid,
+                    name=name,
+                    gender=self.gender,
+                    spirit_root=spirit_root,
+                    spirit_root_type=root_type,
+                    comprehension=stats["comprehension"],
+                    physique=stats["physique"],
+                    fortune=stats["fortune"],
+                    bone=stats["bone"],
+                    soul=stats["soul"],
+                    lifespan=lifespan,
+                    lifespan_max=lifespan,
+                    spirit_stones=stats["spirit_stones"],
+                    created_at=now,
+                    last_active=now,
+                    current_city=starting_city,
+                ))
+            await session.commit()
 
         embed = _build_result_embed(
             name=name,
@@ -362,7 +350,7 @@ class CharacterCreateView(discord.ui.View):
 
         await interaction.response.defer(ephemeral=True)
 
-        existing = get_player(self.uid)
+        existing = await get_player(self.uid)
         if existing and not existing.get("is_dead"):
             self._done = True
             if self._text_task:
@@ -397,7 +385,7 @@ class CharacterCreateView(discord.ui.View):
         if self.gender is None or len(self.answers) != len(QUESTIONS):
             return
 
-        existing = get_player(self.uid)
+        existing = await get_player(self.uid)
         if existing and not existing.get("is_dead"):
             self._done = True
             if self._text_task:

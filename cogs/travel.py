@@ -2,7 +2,8 @@ import discord
 from discord.ext import commands
 
 from utils.config import COMMAND_PREFIX
-from utils.db import get_conn
+from sqlalchemy import text
+from utils.db_async import AsyncSessionLocal
 from utils.world import CITIES
 from utils.character import seconds_to_years
 from utils.player import get_player, is_defending
@@ -15,7 +16,7 @@ class TravelCog(commands.Cog, name="Travel"):
     @commands.hybrid_command(name="移动", aliases=["yd"], description="前往指定城市或秘地")
     async def travel(self, ctx, *, city_name: str = None):
         uid = str(ctx.author.id)
-        player = get_player(uid)
+        player = await get_player(uid)
 
         component_interaction = getattr(ctx, "_component_interaction", None)
 
@@ -117,12 +118,15 @@ class TravelCog(commands.Cog, name="Travel"):
         if target["name"] == player["current_city"]:
             return await _out(f"{ctx.author.mention} 道友已在 **{target['name']}**，无需移动。")
 
-        if is_defending(uid):
+        if await is_defending(uid):
             return await _out(f"{ctx.author.mention} 你正在守城，无法离开！坚守阵地直到事件结束。")
 
-        with get_conn() as conn:
-            conn.execute("UPDATE players SET current_city = ? WHERE discord_id = ?", (target["name"], uid))
-            conn.commit()
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                text("UPDATE players SET current_city = :city WHERE discord_id = :uid"),
+                {"city": target["name"], "uid": uid},
+            )
+            await session.commit()
 
         embed = discord.Embed(
             title=f"✦ 抵达 {target['name']} ✦",

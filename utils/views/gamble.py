@@ -20,7 +20,7 @@ def _gamble_overview_embed(player: dict) -> discord.Embed:
             "财富与命运，皆在一掷之间。\n\n"
             f"今日剩余次数：**{remaining} / {DAILY_LIMIT}**\n"
             f"当前灵石：**{player.get('spirit_stones', 0):,}**\n\n"
-            f"**输赢概率：** {probs_str}\n\n"
+            f"**输赢概率：** {probs_str}\n"
             "大赢 ×3 · 赢 ×2 · 小赢 ×1.5 · 输 ×0\n\n"
             "选择押注金额："
         ),

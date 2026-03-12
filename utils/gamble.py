@@ -12,6 +12,9 @@ with open(_config_path, encoding="utf-8") as _f:
 DAILY_LIMIT = CONFIG["daily_limit"]
 BET_OPTIONS = CONFIG["bet_options"]
 
+_total_weight = sum(o["weight"] for o in CONFIG["outcomes"])
+OUTCOME_PROBS = [(o["label"], round(100 * o["weight"] / _total_weight, 1)) for o in CONFIG["outcomes"]]
+
 
 async def do_gamble(uid: str, bet: int) -> dict:
     async with AsyncSessionLocal() as session:

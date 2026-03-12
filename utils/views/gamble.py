@@ -1,5 +1,5 @@
 import discord
-from utils.gamble import do_gamble, BET_OPTIONS, DAILY_LIMIT
+from utils.gamble import do_gamble, BET_OPTIONS, DAILY_LIMIT, OUTCOME_PROBS
 
 
 def _gamble_overview_embed(player: dict) -> discord.Embed:
@@ -13,17 +13,19 @@ def _gamble_overview_embed(player: dict) -> discord.Embed:
         daily_count = 0
 
     remaining = DAILY_LIMIT - daily_count
+    probs_str = " · ".join(f"{label} {p}%" for label, p in OUTCOME_PROBS)
     embed = discord.Embed(
         title="✦ 赌坊 · 押注台 ✦",
         description=(
             "财富与命运，皆在一掷之间。\n\n"
             f"今日剩余次数：**{remaining} / {DAILY_LIMIT}**\n"
             f"当前灵石：**{player.get('spirit_stones', 0):,}**\n\n"
+            f"**输赢概率：** {probs_str}\n\n"
             "选择押注金额："
         ),
         color=discord.Color.dark_gold(),
     )
-    embed.set_footer(text="大赢 ×5 · 赢 ×2 · 小赢 ×1.5 · 输 ×0")
+    embed.set_footer(text="大赢 ×3 · 赢 ×2 · 小赢 ×1.5 · 输 ×0")
     return embed
 
 

@@ -59,6 +59,7 @@ class CityMenuView(discord.ui.View):
             self.add_item(CityMenuButton("每日签到", "checkin", discord.ButtonStyle.success))
             self.add_item(CityMenuButton("赌坊", "gamble", discord.ButtonStyle.danger))
             self.add_item(CityMenuButton("轮转赌坊", "roulette", discord.ButtonStyle.danger))
+            self.add_item(CityMenuButton("钱庄", "bank", discord.ButtonStyle.primary))
 
         self.add_item(CityMenuButton("返回主菜单", "menu", discord.ButtonStyle.secondary))
 
@@ -156,4 +157,24 @@ class CityMenuButton(discord.ui.Button):
             await interaction.response.edit_message(
                 embed=_wheel_overview_embed(player),
                 view=RouletteView(interaction.user, player, cog),
+            )
+
+        elif self.action == "bank":
+            from utils.views.bank import BankMainView, _bank_main_embed
+            from utils.bank import get_bank_account, get_term_deposits, BANK_CITIES
+            uid = str(interaction.user.id)
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    text("SELECT * FROM players WHERE discord_id = :uid"), {"uid": uid}
+                )
+                player = dict(result.fetchone()._mapping)
+            if player.get("current_city") not in BANK_CITIES:
+                cities_str = "、".join(BANK_CITIES)
+                await interaction.response.send_message(f"钱庄只在以下城市设有分号：{cities_str}", ephemeral=True)
+                return
+            account = await get_bank_account(uid)
+            deposits = await get_term_deposits(uid)
+            await interaction.response.edit_message(
+                embed=_bank_main_embed(player, account, deposits),
+                view=BankMainView(interaction.user, player, account, deposits, cog),
             )

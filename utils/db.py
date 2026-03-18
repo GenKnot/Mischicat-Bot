@@ -244,6 +244,26 @@ def init_db():
             )
         """)
         _migrate(conn)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bank_accounts (
+                discord_id          TEXT PRIMARY KEY,
+                demand_balance      INTEGER NOT NULL DEFAULT 0,
+                demand_deposited_at REAL NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bank_deposits (
+                deposit_id   TEXT PRIMARY KEY,
+                discord_id   TEXT NOT NULL,
+                principal    INTEGER NOT NULL,
+                term_years   INTEGER NOT NULL,
+                rate         REAL NOT NULL,
+                interest     INTEGER NOT NULL,
+                deposited_at REAL NOT NULL,
+                due_at       REAL NOT NULL,
+                status       TEXT NOT NULL DEFAULT 'active'
+            )
+        """)
         conn.commit()
 
 

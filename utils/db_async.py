@@ -197,3 +197,25 @@ class PublicEventParticipant(Base):
     activity: Mapped[str | None] = mapped_column(String, primary_key=True, nullable=True)
     joined_at: Mapped[float] = mapped_column(Float, nullable=False)
     contribution: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class BankAccount(Base):
+    __tablename__ = "bank_accounts"
+
+    discord_id: Mapped[str] = mapped_column(String, primary_key=True)
+    demand_balance: Mapped[int] = mapped_column(Integer, default=0)
+    demand_deposited_at: Mapped[float] = mapped_column(Float, default=0)
+
+
+class BankDeposit(Base):
+    __tablename__ = "bank_deposits"
+
+    deposit_id: Mapped[str] = mapped_column(String, primary_key=True)
+    discord_id: Mapped[str] = mapped_column(String, nullable=False)
+    principal: Mapped[int] = mapped_column(Integer, nullable=False)
+    term_years: Mapped[int] = mapped_column(Integer, nullable=False)
+    rate: Mapped[float] = mapped_column(Float, nullable=False)
+    interest: Mapped[int] = mapped_column(Integer, nullable=False)
+    deposited_at: Mapped[float] = mapped_column(Float, nullable=False)
+    due_at: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="active")

@@ -30,6 +30,22 @@ def exit_with_pause(msg: str | None = None, code: int = 0):
     sys.exit(code)
 
 
+def _update_log_path() -> str:
+    # Default log file: repository root next to main.py
+    return os.getenv("UPDATE_LOG_PATH", "auto_update.log").strip() or "auto_update.log"
+
+
+def _log_update(msg: str):
+    line = f"[auto-update] {msg}"
+    print(line)
+    try:
+        with open(_update_log_path(), "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        # Logging should never break the bot.
+        pass
+
+
 
 # Optionally load .env if present, but do not require it
 try:
@@ -99,23 +115,24 @@ def maybe_update_repo_once() -> bool:
 
     git_root = _get_git_root()
     if not git_root:
-        print("[auto-update] Not a git repository; skip.")
+        _log_update("Not a git repository; skip.")
         return False
 
     current = _get_current_commit()
     if not current:
-        print("[auto-update] Cannot resolve current git commit; skip.")
+        _log_update("Cannot resolve current git commit; skip.")
         return False
 
     target = _resolve_target_commit(channel)
     if not target:
-        print(f"[auto-update] Cannot resolve target commit for channel={channel}; skip.")
+        _log_update(f"Cannot resolve target commit for channel={channel}; skip.")
         return False
 
     if current == target:
         return False
 
-    print(f"[auto-update] Updating git repo: {current[:7]} -> {target[:7]}")
+    _log_update(f"Resolved current={current[:7]} target={target[:7]} channel={channel}")
+    _log_update(f"Updating git repo: {current[:7]} -> {target[:7]}")
     _run_git("reset", "--hard", target, cwd=git_root)
     return True
 
@@ -129,13 +146,27 @@ async def auto_update_loop():
     interval_s = max(5.0, interval_min * 60.0)
 
     try:
+        git_root = _get_git_root()
+        current = _get_current_commit()
+        channel = os.getenv("UPDATE_CHANNEL", "stable").strip().lower()
+        log_path = _update_log_path()
+        if git_root and current:
+            _log_update(
+                f"Startup: log={log_path} current HEAD={current[:7]} channel={channel}"
+            )
+        else:
+            _log_update(f"Startup: log={log_path} current HEAD unavailable channel={channel}")
+    except Exception as e:
+        _log_update(f"Startup: cannot read git info: {e!r}")
+
+    try:
         updated = maybe_update_repo_once()
     except Exception as e:
-        print(f"[auto-update] Startup check failed: {e!r}")
+        _log_update(f"Startup check failed: {e!r}")
         updated = False
 
     if updated:
-        print("[auto-update] Restarting after update...")
+        _log_update("Restarting after update...")
         os.execv(sys.executable, [sys.executable, *sys.argv])
 
     while True:
@@ -143,11 +174,11 @@ async def auto_update_loop():
         try:
             updated = maybe_update_repo_once()
         except Exception as e:
-            print(f"[auto-update] Update check failed: {e!r}")
+            _log_update(f"Update check failed: {e!r}")
             continue
 
         if updated:
-            print("[auto-update] Restarting after update...")
+            _log_update("Restarting after update...")
             os.execv(sys.executable, [sys.executable, *sys.argv])
 
 

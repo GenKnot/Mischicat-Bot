@@ -123,9 +123,9 @@ async def index(request: Request):
         ).fetchall()
         top_stats = [dict(r) for r in top_stats]
     return templates.TemplateResponse(
-        "index.html",
-        {
-            "request": request,
+        request=request,
+        name="index.html",
+        context={
             "total": total,
             "dead": dead,
             "cultivating": cultivating,
@@ -179,9 +179,9 @@ async def players(
             ).fetchall()
         ]
     return templates.TemplateResponse(
-        "players.html",
-        {
-            "request": request,
+        request=request,
+        name="players.html",
+        context={
             "players": rows,
             "q": q,
             "city": city,
@@ -218,9 +218,9 @@ async def player_detail(request: Request, discord_id: str):
     for e in equipment:
         e["stats"] = json.loads(e.get("stats") or "{}")
     return templates.TemplateResponse(
-        "player_detail.html",
-        {
-            "request": request,
+        request=request,
+        name="player_detail.html",
+        context={
             "player": player,
             "inventory": [dict(i) for i in inventory],
             "equipment": equipment,
@@ -289,9 +289,9 @@ async def events(request: Request, page: int = 1):
     paged = events[(page - 1) * PAGE_SIZE : page * PAGE_SIZE]
 
     return templates.TemplateResponse(
-        "events.html",
-        {
-            "request": request,
+        request=request,
+        name="events.html",
+        context={
             "events": paged,
             "page": page,
             "total_pages": total_pages,
@@ -340,9 +340,9 @@ async def items_page(
     types = list(TYPE_LABEL.values())
     rarities = ["普通", "稀有", "珍贵", "绝世"]
     return templates.TemplateResponse(
-        "items.html",
-        {
-            "request": request,
+        request=request,
+        name="items.html",
+        context={
             "by_type": by_type,
             "type_map": TYPE_LABEL,
             "rarities": rarities,
@@ -386,9 +386,9 @@ async def stats(request: Request, sort: str = "cultivation", order: str = "desc"
                 f"FROM players WHERE is_dead=0 ORDER BY {sort} {direction}"
             ).fetchall()
     return templates.TemplateResponse(
-        "stats.html",
-        {
-            "request": request,
+        request=request,
+        name="stats.html",
+        context={
             "players": [dict(r) for r in rows],
             "sort": sort,
             "order": order,
@@ -494,9 +494,9 @@ async def techniques_page(
     grades = list(GRADE_ORDER.keys())
 
     return templates.TemplateResponse(
-        "techniques.html",
-        {
-            "request": request,
+        request=request,
+        name="techniques.html",
+        context={
             "by_grade": ordered_by_grade,
             "types": types,
             "grades": grades,
@@ -564,9 +564,9 @@ async def equipment_preview(
     tiers = [{"val": i, "label": TIER_NAMES[i]} for i in range(len(TIER_NAMES))]
 
     return templates.TemplateResponse(
-        "equipment_preview.html",
-        {
-            "request": request,
+        request=request,
+        name="equipment_preview.html",
+        context={
             "results": results,
             "slots": SLOTS,
             "qualities": QUALITY_ORDER,
@@ -587,9 +587,9 @@ async def dead_players(request: Request):
             "SELECT * FROM players WHERE is_dead=1 ORDER BY last_active DESC"
         ).fetchall()
     return templates.TemplateResponse(
-        "dead.html",
-        {
-            "request": request,
+        request=request,
+        name="dead.html",
+        context={
             "players": [dict(r) for r in rows],
         },
     )
@@ -637,9 +637,9 @@ async def world_page(request: Request):
         ]
 
     return templates.TemplateResponse(
-        "world.html",
-        {
-            "request": request,
+        request=request,
+        name="world.html",
+        context={
             "cities_by_region": cities_by_region,
             "regions_order": regions_order,
             "special_regions": SPECIAL_REGIONS,

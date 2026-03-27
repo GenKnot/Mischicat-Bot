@@ -16,13 +16,14 @@ def _parse_techniques(raw) -> list:
 
 
 async def calc_power(player: dict) -> float:
-    from utils.buffs import get_combat_power_bonus, get_stat_temp
+    from utils.buffs import get_combat_power_bonus, get_stat_temp, get_fortune_permanent_bonus
     base = (
         player.get("comprehension", 5) +
         player.get("physique", 5) +
         player.get("bone", 5) +
         player.get("soul", 5) +
-        player.get("fortune", 5)
+        player.get("fortune", 5) +
+        get_fortune_permanent_bonus(player)
     )
     stat_temp = get_stat_temp(player)
     base += sum(stat_temp.values())

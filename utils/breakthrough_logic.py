@@ -5,6 +5,7 @@ from utils.realms import (
     cultivation_needed, lifespan_max_for_realm, next_realm,
     roll_breakthrough, apply_failure
 )
+from utils.adventure_chain import try_fox_charm
 
 
 async def can_breakthrough(discord_id: str) -> tuple[bool, dict | None]:
@@ -81,14 +82,16 @@ async def do_single_breakthrough(discord_id: str, player_dict: dict) -> dict:
             player.cultivation = new_cultivation
             player.lifespan = new_lifespan
             player.last_active = now
-            
+
             if new_lifespan <= 0:
-                player.is_dead = True
-            
+                saved = await try_fox_charm(discord_id, player)
+                if not saved:
+                    player.is_dead = True
+
             await session.commit()
-        
+
         needed = cultivation_needed(realm)
-        
+
         return {
             "success": True,
             "breakthrough": False,
@@ -214,14 +217,16 @@ async def handle_zhuji_breakthrough(discord_id: str, use_pill: bool) -> dict:
             player.cultivation = new_cultivation
             player.lifespan = new_lifespan
             player.last_active = now
-            
+
             if new_lifespan <= 0:
-                player.is_dead = True
-            
+                saved = await try_fox_charm(discord_id, player)
+                if not saved:
+                    player.is_dead = True
+
             await session.commit()
-        
+
         needed = cultivation_needed(player_dict["realm"])
-        
+
         return {
             "success": True,
             "breakthrough": False,
@@ -298,14 +303,16 @@ async def handle_ningdan_breakthrough(discord_id: str, use_pill: bool) -> dict:
             player.cultivation = new_cultivation
             player.lifespan = new_lifespan
             player.last_active = now
-            
+
             if new_lifespan <= 0:
-                player.is_dead = True
-            
+                saved = await try_fox_charm(discord_id, player)
+                if not saved:
+                    player.is_dead = True
+
             await session.commit()
-        
+
         needed = cultivation_needed(player_dict["realm"])
-        
+
         return {
             "success": True,
             "breakthrough": False,
@@ -383,14 +390,16 @@ async def handle_huaying_breakthrough(discord_id: str, use_pill: bool) -> dict:
             player.cultivation = new_cultivation
             player.lifespan = new_lifespan
             player.last_active = now
-            
+
             if new_lifespan <= 0:
-                player.is_dead = True
-            
+                saved = await try_fox_charm(discord_id, player)
+                if not saved:
+                    player.is_dead = True
+
             await session.commit()
-        
+
         needed = cultivation_needed(player_dict["realm"])
-        
+
         return {
             "success": True,
             "breakthrough": False,

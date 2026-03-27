@@ -200,6 +200,14 @@ def _migrate(conn):
     existing_p = {row[1] for row in conn.execute("PRAGMA table_info(players)")}
     if "exam_attempts_left" not in existing_p:
         conn.execute("ALTER TABLE players ADD COLUMN exam_attempts_left INTEGER NOT NULL DEFAULT 0")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS adventure_progress (
+            discord_id  TEXT PRIMARY KEY,
+            progress    TEXT NOT NULL DEFAULT '{}',
+            updated_at  REAL NOT NULL DEFAULT 0
+        )
+    """)
     conn.commit()
 
 

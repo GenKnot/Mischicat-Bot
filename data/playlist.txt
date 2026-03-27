@@ -1,0 +1,5 @@
+# 固定播放列表 - 每行一个 YouTube 链接或搜索词
+# 以 # 开头的行为注释，会被忽略
+# 支持：YouTube 链接、YouTube 播放列表链接、搜索词
+
+https://www.youtube.com/watch?v=dQw4w9WgXcQ

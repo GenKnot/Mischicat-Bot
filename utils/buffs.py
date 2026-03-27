@@ -155,3 +155,19 @@ def get_reputation_bonus(player) -> float:
         return 0.0
     pct = entry.get("value", 0) if isinstance(entry, dict) else entry
     return pct / 100.0
+
+
+def get_fortune_permanent_bonus(player) -> int:
+    buffs = get_buffs(player)
+    val = buffs.get("fortune_permanent_bonus", 0)
+    if isinstance(val, dict):
+        return val.get("value", 0)
+    return int(val)
+
+
+def has_fox_charm(player) -> bool:
+    return get_buff_value(player, "fox_charm", 0) >= 1
+
+
+def consume_fox_charm(player_buffs_json: str) -> str:
+    return consume_once_buff(player_buffs_json, "fox_charm")[1]

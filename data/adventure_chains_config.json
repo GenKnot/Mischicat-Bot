@@ -1,0 +1,7 @@
+{
+  "trigger_chance": {
+    "spirit_fox": 0.00035,
+    "ancient_tomb": 0.0003,
+    "wandering_sword": 0.0004
+  }
+}

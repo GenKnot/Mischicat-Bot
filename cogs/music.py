@@ -1,10 +1,13 @@
 import asyncio
+import os
 from collections import deque
 
 import discord
 from discord.ext import commands
 
 from utils.ytdlp_helper import build_ffmpeg_options, get_ytdl
+
+PLAYLIST_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "playlist.txt")
 
 
 class MusicCog(commands.Cog, name="Music"):
@@ -327,6 +330,68 @@ class MusicCog(commands.Cog, name="Music"):
                 lines.append(f"  {i}. {item['title']}")
 
         await ctx.send("\n".join(lines))
+
+    @commands.hybrid_command(name="playlist", aliases=["pl"], description="播放 data/playlist.txt 里的固定播放列表")
+    async def playlist_cmd(self, ctx):
+        if not await self._ensure_voice(ctx):
+            return
+
+        if not os.path.exists(PLAYLIST_FILE):
+            return await ctx.send("找不到 `data/playlist.txt`，请先创建并填入链接。")
+
+        with open(PLAYLIST_FILE, encoding="utf-8") as f:
+            entries = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+
+        if not entries:
+            return await ctx.send("`data/playlist.txt` 是空的，请填入 YouTube 链接或搜索词。")
+
+        await ctx.send(f"正在加载固定播放列表，共 **{len(entries)}** 条，请稍候…")
+
+        loop = asyncio.get_event_loop()
+        added = 0
+
+        for query in entries:
+            try:
+                ytdl = get_ytdl(with_cookies=True)
+                data = await loop.run_in_executor(None, lambda q=query: ytdl.extract_info(q, download=False))
+            except Exception:
+                try:
+                    ytdl = get_ytdl(with_cookies=False)
+                    data = await loop.run_in_executor(None, lambda q=query: ytdl.extract_info(q, download=False))
+                except Exception as e:
+                    await ctx.send(f"跳过（无法加载）：`{query[:80]}` — {str(e)[:100]}")
+                    continue
+
+            if "entries" in data and data["entries"]:
+                for e in data["entries"]:
+                    if not e:
+                        continue
+                    self.queue.append({
+                        "title": e.get("title", "unknown"),
+                        "url": e["url"],
+                        "webpage_url": e.get("webpage_url") or query,
+                        "artist": e.get("artist"),
+                        "track": e.get("track"),
+                        "uploader": e.get("uploader"),
+                        "http_headers": e.get("http_headers") or data.get("http_headers"),
+                    })
+                    added += 1
+            else:
+                self.queue.append({
+                    "title": data.get("title", "unknown"),
+                    "url": data["url"],
+                    "webpage_url": data.get("webpage_url") or query,
+                    "artist": data.get("artist"),
+                    "track": data.get("track"),
+                    "uploader": data.get("uploader"),
+                    "http_headers": data.get("http_headers"),
+                })
+                added += 1
+
+        await ctx.send(f"固定播放列表已加载，共 **{added}** 首歌曲加入队列。")
+
+        if ctx.voice_client and not ctx.voice_client.is_playing() and not ctx.voice_client.is_paused():
+            self._play_next(ctx)
 
 
 async def setup(bot):

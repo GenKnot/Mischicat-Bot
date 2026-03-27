@@ -221,6 +221,14 @@ class BankDeposit(Base):
     status: Mapped[str] = mapped_column(String, default="active")
 
 
+class AdventureProgress(Base):
+    __tablename__ = "adventure_progress"
+
+    discord_id: Mapped[str] = mapped_column(String, primary_key=True)
+    progress: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[float] = mapped_column(Float, default=0)
+
+
 class MarketListing(Base):
     __tablename__ = "market_listings"
 

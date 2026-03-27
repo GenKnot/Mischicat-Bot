@@ -11,6 +11,8 @@ from utils.player import get_player
 from utils.equipment_db import give_equipment
 from utils.events import get_event_pool
 from utils.character import seconds_to_years, get_explore_limit_bonus
+from utils.adventure_chain import get_chain_progress, get_available_chains, get_trigger_chance
+from utils.events.adventure_chains import ALL_CHAINS
 
 EXPLORE_LIMIT = 8
 EXPLORE_RESET_YEARS = 5
@@ -156,6 +158,26 @@ async def _consume_explore_buffs(discord_id: str, player: dict, rewards: dict):
             await session.commit()
 
 
+async def _try_adventure_chain(player: dict) -> tuple[dict | None, int]:
+    """
+    检查是否有可触发的奇遇链阶段。
+    返回 (chain, stage_idx) 或 (None, -1)。
+    """
+    import random
+    uid = player.get("discord_id", "")
+    progress = await get_chain_progress(uid)
+    available = get_available_chains(ALL_CHAINS, player, progress)
+    if not available:
+        return None, -1
+
+    # 按触发概率随机抽取
+    for chain, stage_idx in random.sample(available, len(available)):
+        chance = get_trigger_chance(chain["id"], chain.get("trigger_chance", 0.03))
+        if random.random() < chance:
+            return chain, stage_idx
+    return None, -1
+
+
 def _check_condition(player, condition) -> bool:
     if not condition:
         return True
@@ -213,6 +235,26 @@ class ExploreResultView(discord.ui.View):
             return await interaction.followup.send("拍卖会进行中，在万宝楼内无法探险。", ephemeral=True)
         await _increment_explore(uid, player)
         player = await get_player(uid)
+
+        # 优先检查奇遇链
+        chain, stage_idx = await _try_adventure_chain(dict(player))
+        if chain is not None:
+            stage = chain["stages"][stage_idx]
+            count = player["explore_count"]
+            limit = await _get_explore_limit(player)
+            embed = discord.Embed(
+                title=f"✨ {chain['name']} · {stage['title']} ✨",
+                description=stage["desc"],
+                color=discord.Color.purple(),
+            )
+            embed.set_footer(text=f"本轮探险次数：{count}/{limit} ｜ 奇遇触发")
+            from utils.views.adventure_chain import ChainStageView
+            return await interaction.followup.send(
+                interaction.user.mention,
+                embed=embed,
+                view=ChainStageView(interaction.user, chain, stage_idx, player, self.cog)
+            )
+
         event = get_event_pool(dict(player))
         embed = discord.Embed(
             title=f"✦ {event['title']} ✦",
@@ -433,6 +475,25 @@ class ExploreCog(commands.Cog, name="Explore"):
 
         await _increment_explore(uid, player)
         player = await get_player(uid)
+
+        # 优先检查奇遇链
+        chain, stage_idx = await _try_adventure_chain(dict(player))
+        if chain is not None:
+            stage = chain["stages"][stage_idx]
+            count = player["explore_count"]
+            limit = await _get_explore_limit(player)
+            embed = discord.Embed(
+                title=f"✨ {chain['name']} · {stage['title']} ✨",
+                description=stage["desc"],
+                color=discord.Color.purple(),
+            )
+            embed.set_footer(text=f"本轮探险次数：{count}/{limit} ｜ 奇遇触发")
+            from utils.views.adventure_chain import ChainStageView
+            return await ctx.send(
+                ctx.author.mention,
+                embed=embed,
+                view=ChainStageView(ctx.author, chain, stage_idx, player, self)
+            )
 
         event = get_event_pool(dict(player))
         embed = discord.Embed(

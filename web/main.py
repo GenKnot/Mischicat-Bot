@@ -42,6 +42,9 @@ async def service_worker():
 
 
 templates = Jinja2Templates(directory=_templates_dir)
+# Disable cache to fix compatibility issue with Jinja2 3.1+ and Python 3.14
+templates.env.cache = {}
+templates.env.auto_reload = True
 
 
 def get_conn():
